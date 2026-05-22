@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Power Plant Run</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="demo-shell" data-style="steampunk">
+      <header class="topbar">
+        <div>
+          <h1>Power Plant Run</h1>
+          <p id="run-status">Approaching the plant</p>
+        </div>
+
+        <div class="controls" aria-label="Game controls">
+          <div class="style-switcher" aria-label="Graphics style">
+            <button class="style-button is-active" type="button" data-style="steampunk" aria-pressed="true">
+              <span class="swatch swatch-steampunk" aria-hidden="true"></span>
+              Steampunk
+            </button>
+            <button class="style-button" type="button" data-style="cyberpunk" aria-pressed="false">
+              <span class="swatch swatch-cyberpunk" aria-hidden="true"></span>
+              Cyberpunk
+            </button>
+            <button class="style-button" type="button" data-style="futuristic" aria-pressed="false">
+              <span class="swatch swatch-futuristic" aria-hidden="true"></span>
+              Futuristic
+            </button>
+          </div>
+
+          <button class="replay-button" type="button" id="replay-button" aria-label="Replay run">
+            Replay
+          </button>
+        </div>
+      </header>
+
+      <section class="stage-wrap" aria-label="Soldier entering the power plant demo">
+        <canvas id="game-canvas" width="384" height="216"></canvas>
+      </section>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>
