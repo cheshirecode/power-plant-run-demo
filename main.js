@@ -346,6 +346,7 @@ function replay() {
 }
 
 function startGame() {
+  if (sessionState.roomId && sessionState.room?.phase === "lobby") return;
   gameStarted = true;
   shell.classList.remove("is-gated");
   replay();
@@ -576,6 +577,7 @@ function updateSessionUi() {
   readyButton.textContent = sessionState.ready ? "Ready" : "Ready";
   roomReadyButton.disabled = readyButton.disabled;
   roomReadyButton.textContent = sessionState.ready ? "Ready" : "Ready";
+  shell.classList.toggle("is-roomed", Boolean(sessionState.roomId));
   updateRoomSheet();
 }
 

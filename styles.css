@@ -274,6 +274,10 @@ h1 {
   display: none;
 }
 
+.demo-shell.is-roomed .start-gate {
+  display: none;
+}
+
 .room-sheet {
   z-index: 3;
 }
