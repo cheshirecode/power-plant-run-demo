@@ -7,19 +7,29 @@ const SESSION_COOKIE = "ppr_session";
 const STATE_COOKIE = "ppr_oauth_state";
 const NEXT_COOKIE = "ppr_oauth_next";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
-const ROUND_COUNTDOWN_MS = 20_000;
+const ROUND_COUNTDOWN_MS = 10_000;
 const EXPLOSION_DURATION_MS = 2_200;
-const NODE_VALUE_MIN = 5;
-const NODE_VALUE_MAX = 10;
+const NODE_VALUE_MIN = 3;
+const NODE_VALUE_MAX = 12;
 const NODE_REPAIR_RADIUS = 12;
+const NODE_MIN_DISTANCE = 30;
+const NODE_MAX_VALUE_DISTANCE = 40;
+const NODE_MIN_VALUE_DISTANCE = 190;
 const BLAST_CENTER = { x: 244, y: 108 };
 const BLAST_RADIUS_BASE = 92;
 const BLAST_RADIUS_JITTER = 10;
 const MAX_PLAYERS = 4;
 const START_NODES = [
-  { id: "n1", x: 180, y: 120 },
-  { id: "n2", x: 245, y: 90 },
-  { id: "n3", x: 300, y: 140 },
+  { id: "n1", x: 72, y: 176 },
+  { id: "n2", x: 94, y: 70 },
+  { id: "n3", x: 142, y: 154 },
+  { id: "n4", x: 174, y: 84 },
+  { id: "n5", x: 198, y: 142 },
+  { id: "n6", x: 228, y: 70 },
+  { id: "n7", x: 272, y: 70 },
+  { id: "n8", x: 292, y: 138 },
+  { id: "n9", x: 326, y: 96 },
+  { id: "n10", x: 326, y: 178 },
 ];
 
 export class GameRoom {
@@ -214,6 +224,9 @@ export class GameRoom {
       this.createSummary();
       await this.setPhase("end");
     } else if (fromAlarm) {
+      if (this.roomState.phase === "repair") {
+        await this.state.storage.setAlarm(this.roomState.countdownEndsAt + 50);
+      }
       this.broadcastState("room:state");
     }
   }
@@ -269,12 +282,30 @@ export class GameRoom {
 }
 
 function cloneNodes() {
+  assertNodeSpacing(START_NODES);
   return START_NODES.map((node, index) => ({
     ...node,
     repaired: false,
-    value: NODE_VALUE_MIN + Math.floor(Math.random() * (NODE_VALUE_MAX - NODE_VALUE_MIN + 1)),
+    value: nodeValue(node),
     seed: Math.random() + index,
   }));
+}
+
+function assertNodeSpacing(nodes) {
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      if (Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y) < NODE_MIN_DISTANCE) {
+        throw new Error(`Repair nodes ${nodes[i].id} and ${nodes[j].id} are too close`);
+      }
+    }
+  }
+}
+
+function nodeValue(node) {
+  const distance = Math.hypot(node.x - BLAST_CENTER.x, node.y - BLAST_CENTER.y);
+  const falloff = (distance - NODE_MAX_VALUE_DISTANCE) / (NODE_MIN_VALUE_DISTANCE - NODE_MAX_VALUE_DISTANCE);
+  const closeness = 1 - clampNumber(falloff, 0, 1);
+  return Math.round(clampNumber(NODE_VALUE_MIN + closeness * (NODE_VALUE_MAX - NODE_VALUE_MIN), NODE_VALUE_MIN, NODE_VALUE_MAX));
 }
 
 function makeBlast() {

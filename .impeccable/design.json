@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-23T00:00:00.000Z",
+  "title": "Design System: Power Plant Run",
+  "extensions": {
+    "northStar": "Arcade War Room",
+    "register": "product",
+    "colorMeta": {
+      "accent-brass": {
+        "role": "primary",
+        "displayName": "Warning Brass",
+        "canonical": "#d5983b",
+        "usage": "Countdown rails, node values, selected controls, and urgent decisions."
+      },
+      "accent-blue": {
+        "role": "secondary",
+        "displayName": "Power Core Blue",
+        "canonical": "#70a8ff",
+        "usage": "Power glow, active plant details, and contrast against the industrial field."
+      },
+      "page-bg": {
+        "role": "neutral",
+        "displayName": "Oil Field Black",
+        "canonical": "#11140f",
+        "usage": "Page background and deep canvas surround."
+      }
+    },
+    "rules": [
+      "Pressure first: timer, blast risk, and repair rewards must be visible before instructions.",
+      "Readable chaos: keep the board wacky but make player positions, node values, and scores scannable.",
+      "No SaaS polish: avoid rounded cards, hero metrics, glassmorphism, and sterile enterprise spacing."
+    ],
+    "motion": {
+      "principle": "Snappy arcade motion, with blinking only for countdown urgency.",
+      "avoid": "Large decorative motion that competes with gameplay state."
+    }
+  }
+}

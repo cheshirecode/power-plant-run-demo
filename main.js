@@ -302,6 +302,8 @@ const sessionState = {
   briefingDismissedFor: "",
   target: null,
   localPosition: null,
+  nextRoomPollAt: 0,
+  pollingRoom: false,
 };
 
 ctx.imageSmoothingEnabled = false;
@@ -684,6 +686,7 @@ function connectRoom(roomId) {
   sessionState.briefingDismissedFor = "";
   sessionState.localPosition = null;
   sessionState.target = null;
+  sessionState.nextRoomPollAt = 0;
   roomCodeInput.value = roomId;
   updateRoomUrl(roomId);
   updateRoomStatus("Connecting");
@@ -745,6 +748,33 @@ function handleRoomMessage(rawMessage) {
   updateRoomStatus();
   updateSessionUi();
   updateRoomSheet();
+}
+
+async function pollRoomState(time) {
+  if (!sessionState.roomId || !sessionState.room || sessionState.pollingRoom) return;
+  if (sessionState.room.phase !== "repair" && sessionState.room.phase !== "explosion") return;
+  if (time < sessionState.nextRoomPollAt) return;
+
+  sessionState.nextRoomPollAt = time + 1000;
+  sessionState.pollingRoom = true;
+  try {
+    const response = await fetch(`/api/rooms/${sessionState.roomId}`, { headers: { Accept: "application/json" } });
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload.room) {
+        sessionState.room = payload.room;
+        sessionState.ready = Boolean(payload.room.players?.[sessionState.user?.login]?.ready);
+        syncDemoToRoomState(payload.room);
+        updateRoomStatus();
+        updateSessionUi();
+        updateRoomSheet();
+      }
+    }
+  } catch {
+    // WebSocket remains the primary path; polling only closes timer gaps.
+  } finally {
+    sessionState.pollingRoom = false;
+  }
 }
 
 function syncDemoToRoomState(room) {
@@ -1624,15 +1654,18 @@ function drawRoomObjectives(style, time) {
 
   if (room.phase === "repair") {
     for (const node of room.nodes || []) {
-      const pulse = 1 + Math.floor(Math.sin(time / 130 + node.x) * 2);
+      const isRich = node.value >= 10;
+      const pulse = 1 + Math.floor(Math.sin(time / (isRich ? 96 : 130) + node.x) * 2);
       const color = node.repaired ? style.scene.groundLight : style.scene.glow;
       const edge = node.repaired ? style.scene.groundDark : style.scene.accent;
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
-      drawPixelCircle(node.x, node.y, node.repaired ? 7 : 9 + pulse, color, edge);
-      px(node.x - 2, node.y - 2, 4, 4, node.repaired ? style.scene.groundDark : style.css.text);
+      drawPixelCircle(node.x, node.y, node.repaired ? 7 : (isRich ? 11 : 9) + pulse, color, edge);
+      px(node.x - 6, node.y - 6, 12, 12, node.repaired ? style.scene.groundDark : isRich ? style.scene.accent : style.css.strong);
+      px(node.x - 3, node.y - 3, 6, 6, node.repaired ? style.scene.groundLight : style.css.text);
       ctx.fillStyle = style.css.text;
-      ctx.font = "6px monospace";
-      ctx.fillText(String(node.value), node.x - 3, node.y - 13);
+      ctx.font = "7px monospace";
+      px(node.x - (node.value >= 10 ? 8 : 6), node.y - 22, node.value >= 10 ? 16 : 12, 9, "rgba(0, 0, 0, 0.62)");
+      ctx.fillText(String(node.value), node.x - (node.value >= 10 ? 5 : 3), node.y - 14);
       ctx.globalAlpha = 1;
     }
   }
@@ -2094,6 +2127,7 @@ function render(now) {
 
   if (sessionState.room) {
     updateRoomPosition(loop, now);
+    pollRoomState(now);
   }
   setStatus(loop);
   if (sessionState.room?.phase === "end") {
