@@ -126,6 +126,10 @@ export class GameRoom {
       if (this.roomState.closed) {
         return json({ ok: true, room: this.roomSummary() });
       }
+      if (this.roomState.phase === "end") {
+        await this.closeRoom();
+        return json({ ok: true, room: this.roomSummary() });
+      }
       if (this.roomState.ownerId && this.roomState.ownerId !== player.id) {
         return json({ error: "Only the session owner can end this room" }, 403);
       }

@@ -965,11 +965,11 @@ function renderRoomList() {
     spectateButton.addEventListener("click", () => connectRoom(room.id, { spectate: true }));
     row.append(spectateButton);
 
-    if (room.ownerId === sessionState.user?.login && room.phase !== "closed") {
+    if (room.phase === "end" || (room.ownerId === sessionState.user?.login && room.phase !== "closed")) {
       const endButton = document.createElement("button");
       endButton.type = "button";
       endButton.className = "room-list-button";
-      endButton.textContent = "End session";
+      endButton.textContent = room.phase === "end" ? "Clear" : "End session";
       endButton.addEventListener("click", () => endRoomSession(room.id));
       row.append(endButton);
     }
@@ -991,7 +991,7 @@ async function endRoomSession(roomId = sessionState.roomId) {
       leaveRoom("Session ended");
     } else {
       await loadRoomList();
-      updateRoomStatus("Session ended");
+      updateRoomStatus("Cleared");
     }
   } catch {
     updateRoomStatus("End failed");
