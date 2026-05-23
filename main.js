@@ -1,3 +1,6 @@
+import { countdownLabel, countdownMs, countdownSeconds, formatHoldLabel, formatNodeValue, formatScore } from "./client/formatters.js";
+import { buildRoomUrl, clearRoomUrl, getRoomIdFromUrl, normalizeRoomId, updateRoomUrl } from "./client/room-url.js";
+
 const canvas = document.querySelector("#game-canvas");
 const ctx = canvas.getContext("2d", { alpha: false });
 const shell = document.querySelector(".demo-shell");
@@ -11,6 +14,7 @@ const logoutButton = document.querySelector("#logout-button");
 const createRoomButton = document.querySelector("#create-room-button");
 const joinRoomButton = document.querySelector("#join-room-button");
 const readyButton = document.querySelector("#ready-button");
+const leaveRoomButton = document.querySelector("#leave-room-button");
 const copyRoomButton = document.querySelector("#copy-room-button");
 const roomSizeInput = document.querySelector("#room-size-input");
 const roomCodeInput = document.querySelector("#room-code-input");
@@ -535,7 +539,7 @@ function setStatus(loop) {
   if (sessionState.room) {
     const room = sessionState.room;
     let next = `Room ${room.phase}`;
-    if (room.phase === "repair") next = `Detonation in ${getCountdownSeconds()}s`;
+    if (room.phase === "repair") next = `Detonation in ${getCountdownLabel()}s`;
     if (room.phase === "end") next = "Final scores";
     if (next !== lastStatus) {
       statusText.textContent = next;
@@ -591,6 +595,7 @@ function updateSessionUi() {
   readyButton.disabled =
     !user || isSpectator || sessionState.room?.phase !== "lobby" || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
   copyRoomButton.disabled = !sessionState.roomId;
+  leaveRoomButton.disabled = !sessionState.roomId;
   roomSizeInput.disabled = !user;
   roomCodeInput.disabled = !user;
   readyButton.classList.toggle("is-active", sessionState.ready);
@@ -618,7 +623,7 @@ function updateRoomStatus(nextStatus = null) {
   const spectatorCount = players.filter((player) => player.spectator).length;
   const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
   const phase = sessionState.room?.phase || "room";
-  const suffix = phase === "repair" ? ` · ${getCountdownSeconds()}s` : "";
+  const suffix = phase === "repair" ? ` · ${getCountdownLabel()}s` : "";
   const spectators = spectatorCount > 0 ? ` · ${spectatorCount} watching` : "";
   roomStatus.textContent = `${sessionState.roomId} · ${activeCount}/${targetCount}${spectators} · ${phase}${suffix}`;
 }
@@ -646,6 +651,12 @@ async function createRoom() {
   if (!sessionState.user) return;
   updateRoomStatus("Creating");
 
+  const namedRoomId = normalizeRoomId(roomCodeInput.value);
+  if (namedRoomId) {
+    connectRoom(namedRoomId);
+    return;
+  }
+
   try {
     const response = await fetch("/api/rooms", {
       method: "POST",
@@ -665,6 +676,21 @@ async function createRoom() {
   } catch {
     updateRoomStatus("Create failed");
   }
+}
+
+function leaveRoom() {
+  disconnectRoom();
+  sessionState.roomId = "";
+  sessionState.ready = false;
+  sessionState.room = null;
+  sessionState.target = null;
+  sessionState.localPosition = null;
+  sessionState.briefingDismissedFor = "";
+  roomCodeInput.value = "";
+  clearRoomUrl();
+  updateRoomStatus();
+  updateSessionUi();
+  updateRoomSheet();
 }
 
 function joinRoom() {
@@ -865,8 +891,15 @@ function setControlTarget(point) {
 }
 
 function getCountdownSeconds() {
-  if (!sessionState.room?.countdownEndsAt) return 0;
-  return Math.max(0, Math.ceil((sessionState.room.countdownEndsAt - Date.now()) / 1000));
+  return countdownSeconds(sessionState.room);
+}
+
+function getCountdownMs() {
+  return countdownMs(sessionState.room);
+}
+
+function getCountdownLabel() {
+  return countdownLabel(sessionState.room);
 }
 
 function getLocalPlayer() {
@@ -881,28 +914,8 @@ function getCanvasPoint(event) {
   };
 }
 
-function getRoomIdFromUrl() {
-  return normalizeRoomId(new URLSearchParams(window.location.search).get("room") || "");
-}
-
-function updateRoomUrl(roomId) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("room", roomId);
-  window.history.replaceState({}, "", url);
-}
-
-function buildRoomUrl(roomId) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("room", roomId);
-  return url.toString();
-}
-
 function getSelectedRoomSize() {
   return Math.round(clamp(Number(roomSizeInput.value) || 2, 1, 4));
-}
-
-function normalizeRoomId(value) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 40);
 }
 
 function drawBackground(style, time) {
@@ -1654,39 +1667,68 @@ function drawRoomObjectives(style, time) {
 
   if (room.phase === "repair") {
     for (const node of room.nodes || []) {
-      const isRich = node.value >= 10;
+      const isRich = node.value >= 10 || node.bonus;
+      const isClaimed = Boolean(node.claimedBy);
       const pulse = 1 + Math.floor(Math.sin(time / (isRich ? 96 : 130) + node.x) * 2);
-      const color = node.repaired ? style.scene.groundLight : style.scene.glow;
-      const edge = node.repaired ? style.scene.groundDark : style.scene.accent;
+      const color = node.repaired ? style.scene.groundLight : isClaimed ? style.scene.accent : style.scene.glow;
+      const edge = node.repaired ? style.scene.groundDark : node.bonus ? style.css.text : style.scene.accent;
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
+      drawPixelCircle(node.x, node.y, node.repaired ? 7 : node.radius || (isRich ? 11 : 9) + pulse, color, edge);
       drawPixelCircle(node.x, node.y, node.repaired ? 7 : (isRich ? 11 : 9) + pulse, color, edge);
-      px(node.x - 6, node.y - 6, 12, 12, node.repaired ? style.scene.groundDark : isRich ? style.scene.accent : style.css.strong);
+      px(node.x - 7, node.y - 7, 14, 14, node.repaired ? style.scene.groundDark : isRich ? style.scene.accent : style.css.strong);
       px(node.x - 3, node.y - 3, 6, 6, node.repaired ? style.scene.groundLight : style.css.text);
+      if (node.bonus && !node.repaired) {
+        px(node.x - 2, node.y - 11, 4, 4, style.css.text);
+        px(node.x - 2, node.y + 7, 4, 4, style.css.text);
+        px(node.x - 11, node.y - 2, 4, 4, style.css.text);
+        px(node.x + 7, node.y - 2, 4, 4, style.css.text);
+      }
       ctx.fillStyle = style.css.text;
       ctx.font = "7px monospace";
-      px(node.x - (node.value >= 10 ? 8 : 6), node.y - 22, node.value >= 10 ? 16 : 12, 9, "rgba(0, 0, 0, 0.62)");
-      ctx.fillText(String(node.value), node.x - (node.value >= 10 ? 5 : 3), node.y - 14);
+      const label = formatNodeValue(node.value);
+      px(node.x - 13, node.y - 23, 26, 9, "rgba(0, 0, 0, 0.62)");
+      ctx.fillText(label, node.x - 12, node.y - 15);
       ctx.globalAlpha = 1;
     }
   }
 
 }
 
+function drawClaimTimers(style) {
+  const room = sessionState.room;
+  if (!room || room.phase !== "repair") return;
+
+  for (const node of room.nodes || []) {
+    if (!node.claimedBy || node.repaired || !node.claimEndsAt) continue;
+    const player = room.players?.[node.claimedBy];
+    if (!player) continue;
+    const remainingMs = node.claimEndsAt - Date.now();
+    const x = Math.round(player.x || node.x);
+    const y = Math.round(player.y || node.y) - 32;
+    const label = formatHoldLabel(remainingMs);
+    px(x - 12, y - 7, 24, 10, "rgba(0, 0, 0, 0.72)");
+    px(x - 12, y - 7, Math.round(24 * Math.max(0, remainingMs / node.holdMs)), 2, style.scene.accent);
+    ctx.fillStyle = style.css.text;
+    ctx.font = "7px monospace";
+    ctx.fillText(label, x - 10, y + 1);
+  }
+}
+
 function drawBuildingCountdown(style, time) {
   const room = sessionState.room;
   if (!room || room.phase !== "repair") return;
 
-  const seconds = getCountdownSeconds();
+  const seconds = getCountdownMs() / 1000;
   const blink = seconds <= 5 ? Math.sin(time / 90) > -0.25 : Math.sin(time / 280) > -0.7;
   if (!blink) return;
 
-  const label = String(seconds).padStart(2, "0");
+  const label = getCountdownLabel().padStart(5, "0");
   const x = 213;
   const y = 58;
-  px(x - 10, y - 21, 70, 31, "rgba(0, 0, 0, 0.68)");
-  px(x - 10, y - 21, 70, 3, style.scene.accent);
+  px(x - 18, y - 21, 86, 31, "rgba(0, 0, 0, 0.68)");
+  px(x - 18, y - 21, 86, 3, style.scene.accent);
   ctx.fillStyle = seconds <= 5 ? "#ff6b28" : style.css.text;
-  ctx.font = "28px monospace";
+  ctx.font = "24px monospace";
   ctx.fillText(label, x, y);
 }
 
@@ -1699,8 +1741,8 @@ function drawRoomHud(style) {
   px(8, 8, 118, 24, "rgba(0, 0, 0, 0.58)");
   ctx.fillStyle = style.css.text;
   ctx.font = "7px monospace";
-  const scoreLabel = local?.spectator ? "WATCH" : local?.score || 0;
-  ctx.fillText(`TIME ${getCountdownSeconds()}s`, 14, 18);
+  const scoreLabel = local?.spectator ? "WATCH" : formatScore(local?.score);
+  ctx.fillText(`TIME ${getCountdownLabel()}s`, 14, 18);
   ctx.fillText(`SCORE ${scoreLabel}`, 14, 28);
 }
 
@@ -1720,7 +1762,7 @@ function drawRoundSummary(style, summary, options = {}) {
   for (let i = 0; i < visibleRows.length; i += 1) {
     const row = visibleRows[i];
     const label = row.caughtInBlast ? "BLAST" : "CLEAR";
-    ctx.fillText(`${row.id.slice(0, 8)} ${row.score} ${label}`, panelX + 12, panelY + 34 + i * 12);
+    ctx.fillText(`${row.id.slice(0, 8)} ${formatScore(row.score)} ${label}`, panelX + 12, panelY + 34 + i * 12);
   }
 }
 
@@ -2143,6 +2185,7 @@ function render(now) {
   drawBuildingCountdown(style, now);
   if (sessionState.room) {
     drawRoomPlayers(style);
+    drawClaimTimers(style);
     drawRoomHud(style);
   } else {
     drawSquad(style, loop.elapsed, now);
@@ -2170,6 +2213,7 @@ createRoomButton.addEventListener("click", createRoom);
 joinRoomButton.addEventListener("click", joinRoom);
 readyButton.addEventListener("click", toggleReady);
 roomReadyButton.addEventListener("click", toggleReady);
+leaveRoomButton.addEventListener("click", leaveRoom);
 copyRoomButton.addEventListener("click", copyRoomLink);
 canvas.addEventListener("click", handleCanvasClick);
 canvas.addEventListener("pointermove", handleCanvasPointerMove);

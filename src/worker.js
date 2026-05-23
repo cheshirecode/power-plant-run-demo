@@ -9,12 +9,19 @@ const NEXT_COOKIE = "ppr_oauth_next";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
 const ROUND_COUNTDOWN_MS = 10_000;
 const EXPLOSION_DURATION_MS = 2_200;
-const NODE_VALUE_MIN = 3;
-const NODE_VALUE_MAX = 12;
-const NODE_REPAIR_RADIUS = 12;
+const NODE_VALUE_MIN = 1.5;
+const NODE_VALUE_MAX = 6;
+const NODE_BONUS_VALUE_MIN = 7;
+const NODE_BONUS_VALUE_MAX = 9;
+const NODE_BONUS_COUNT_MIN = 3;
+const NODE_BONUS_COUNT_MAX = 4;
+const NODE_HOLD_SECONDS_PER_POINT = 1 / 3;
+const NODE_REPAIR_RADIUS_MIN = 18;
+const NODE_REPAIR_RADIUS_MAX = 26;
 const NODE_MIN_DISTANCE = 30;
 const NODE_MAX_VALUE_DISTANCE = 40;
 const NODE_MIN_VALUE_DISTANCE = 190;
+const NODE_VALUE_DECIMALS = 2;
 const BLAST_CENTER = { x: 244, y: 108 };
 const BLAST_RADIUS_BASE = 92;
 const BLAST_RADIUS_JITTER = 10;
@@ -187,24 +194,54 @@ export class GameRoom {
 
     player.x = clampNumber(message.x, 0, 384);
     player.y = clampNumber(message.y, 0, 216);
-    await this.captureReachedNodes(playerId, player);
+    await this.updateNodeClaims(playerId);
   }
 
-  async captureReachedNodes(playerId, player) {
+  async updateNodeClaims(playerId = null) {
     if (this.roomState.phase !== "repair") return;
 
+    const now = Date.now();
     for (const node of this.roomState.nodes) {
-      if (node.repaired) continue;
-      if (Math.hypot(player.x - node.x, player.y - node.y) > NODE_REPAIR_RADIUS) continue;
-
-      node.repaired = true;
-      node.repairedBy = playerId;
-      node.repairedAt = Date.now();
-      player.score += node.value;
-      this.roomState.score += node.value;
-      this.roomState.countdownEndsAt += node.value * 1000;
-      await this.state.storage.setAlarm(this.roomState.countdownEndsAt + 50);
+      if (!node.claimedBy || node.repaired) continue;
+      const claimant = this.roomState.players[node.claimedBy];
+      if (!claimant || !isInsideNode(claimant, node)) {
+        delete node.claimedBy;
+        delete node.claimedAt;
+        delete node.claimEndsAt;
+        continue;
+      }
+      if (now >= node.claimEndsAt) {
+        await this.repairNode(node, claimant);
+      }
     }
+
+    if (!playerId) return;
+    const player = this.roomState.players[playerId];
+    if (!player) return;
+    if (this.roomState.nodes.some((node) => node.claimedBy === playerId && !node.repaired)) return;
+
+    const node = this.roomState.nodes
+      .filter((candidate) => !candidate.repaired && !candidate.claimedBy && isInsideNode(player, candidate))
+      .sort((a, b) => distanceToNode(player, a) - distanceToNode(player, b))[0];
+    if (!node) return;
+
+    node.claimedBy = playerId;
+    node.claimedAt = now;
+    node.claimEndsAt = now + node.holdMs;
+    await this.scheduleNextRepairAlarm();
+  }
+
+  async repairNode(node, player) {
+    node.repaired = true;
+    node.repairedBy = player.id;
+    node.repairedAt = Date.now();
+    delete node.claimedBy;
+    delete node.claimedAt;
+    delete node.claimEndsAt;
+    player.score = roundValue(player.score + node.value);
+    this.roomState.score = roundValue(this.roomState.score + node.value);
+    this.roomState.countdownEndsAt += Math.round(node.value * 1000);
+    await this.scheduleNextRepairAlarm();
   }
 
   async alarm() {
@@ -217,6 +254,7 @@ export class GameRoom {
     if (!phaseStartedAt || this.roomState.phase === "lobby") return;
 
     const elapsed = Date.now() - phaseStartedAt;
+    await this.updateNodeClaims();
     if (this.roomState.phase === "repair" && Date.now() >= this.roomState.countdownEndsAt) {
       this.applyBlast();
       await this.setPhase("explosion", EXPLOSION_DURATION_MS);
@@ -225,7 +263,7 @@ export class GameRoom {
       await this.setPhase("end");
     } else if (fromAlarm) {
       if (this.roomState.phase === "repair") {
-        await this.state.storage.setAlarm(this.roomState.countdownEndsAt + 50);
+        await this.scheduleNextRepairAlarm();
       }
       this.broadcastState("room:state");
     }
@@ -237,6 +275,15 @@ export class GameRoom {
     if (durationMs) {
       await this.state.storage.setAlarm(Date.now() + durationMs + 50);
     }
+  }
+
+  async scheduleNextRepairAlarm() {
+    if (this.roomState.phase !== "repair") return;
+    const claimEndsAt = this.roomState.nodes
+      .filter((node) => node.claimedBy && !node.repaired)
+      .map((node) => node.claimEndsAt)
+      .filter(Boolean);
+    await this.state.storage.setAlarm(Math.min(this.roomState.countdownEndsAt, ...claimEndsAt) + 50);
   }
 
   applyBlast() {
@@ -255,7 +302,7 @@ export class GameRoom {
       .filter((player) => !player.spectator)
       .map((player) => ({
         id: player.id,
-        score: player.score,
+        score: roundValue(player.score),
         caughtInBlast: Boolean(player.caughtInBlast),
       }))
       .sort((a, b) => b.score - a.score);
@@ -283,12 +330,26 @@ export class GameRoom {
 
 function cloneNodes() {
   assertNodeSpacing(START_NODES);
-  return START_NODES.map((node, index) => ({
-    ...node,
-    repaired: false,
-    value: nodeValue(node),
-    seed: Math.random() + index,
-  }));
+  const bonusNodeIds = chooseBonusNodeIds();
+  return START_NODES.map((node, index) => {
+    const bonus = bonusNodeIds.has(node.id);
+    const value = nodeValue(node, bonus);
+    return {
+      ...node,
+      repaired: false,
+      bonus,
+      value,
+      radius: nodeRadius(node, bonus),
+      holdMs: nodeHoldMs(value),
+      seed: Math.random() + index,
+    };
+  });
+}
+
+function chooseBonusNodeIds() {
+  const count = NODE_BONUS_COUNT_MIN + Math.floor(Math.random() * (NODE_BONUS_COUNT_MAX - NODE_BONUS_COUNT_MIN + 1));
+  const shuffled = [...START_NODES].sort(() => Math.random() - 0.5);
+  return new Set(shuffled.slice(0, count).map((node) => node.id));
 }
 
 function assertNodeSpacing(nodes) {
@@ -301,11 +362,37 @@ function assertNodeSpacing(nodes) {
   }
 }
 
-function nodeValue(node) {
+function nodeValue(node, bonus = false) {
+  if (bonus) {
+    return roundValue(NODE_BONUS_VALUE_MIN + Math.random() * (NODE_BONUS_VALUE_MAX - NODE_BONUS_VALUE_MIN));
+  }
   const distance = Math.hypot(node.x - BLAST_CENTER.x, node.y - BLAST_CENTER.y);
   const falloff = (distance - NODE_MAX_VALUE_DISTANCE) / (NODE_MIN_VALUE_DISTANCE - NODE_MAX_VALUE_DISTANCE);
   const closeness = 1 - clampNumber(falloff, 0, 1);
-  return Math.round(clampNumber(NODE_VALUE_MIN + closeness * (NODE_VALUE_MAX - NODE_VALUE_MIN), NODE_VALUE_MIN, NODE_VALUE_MAX));
+  return roundValue(clampNumber(NODE_VALUE_MIN + closeness * (NODE_VALUE_MAX - NODE_VALUE_MIN), NODE_VALUE_MIN, NODE_VALUE_MAX));
+}
+
+function nodeRadius(node, bonus = false) {
+  if (bonus) return NODE_REPAIR_RADIUS_MAX;
+  const value = nodeValue(node, false);
+  const scale = (value - NODE_VALUE_MIN) / (NODE_VALUE_MAX - NODE_VALUE_MIN);
+  return Math.round(NODE_REPAIR_RADIUS_MIN + scale * (NODE_REPAIR_RADIUS_MAX - NODE_REPAIR_RADIUS_MIN));
+}
+
+function nodeHoldMs(value) {
+  return Math.round(value * NODE_HOLD_SECONDS_PER_POINT * 1000);
+}
+
+function isInsideNode(player, node) {
+  return distanceToNode(player, node) <= node.radius;
+}
+
+function distanceToNode(player, node) {
+  return Math.hypot(player.x - node.x, player.y - node.y);
+}
+
+function roundValue(value) {
+  return Number(value.toFixed(NODE_VALUE_DECIMALS));
 }
 
 function makeBlast() {

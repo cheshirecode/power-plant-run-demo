@@ -23,15 +23,25 @@
 
           <div class="room-controls" aria-label="Room controls">
             <button class="control-button" type="button" id="create-room-button">Create</button>
-            <select class="room-select" id="room-size-input" aria-label="Room player count">
-              <option value="1">1P</option>
-              <option value="2" selected>2P</option>
-              <option value="3">3P</option>
-              <option value="4">4P</option>
+            <select class="room-select" id="room-size-input" aria-label="Active player slots" title="Active player slots">
+              <option value="1">1 player</option>
+              <option value="2" selected>2 players</option>
+              <option value="3">3 players</option>
+              <option value="4">4 players</option>
             </select>
-            <input class="room-input" id="room-code-input" type="text" maxlength="40" autocomplete="off" aria-label="Room code" />
+            <input
+              class="room-input"
+              id="room-code-input"
+              type="text"
+              maxlength="40"
+              autocomplete="off"
+              placeholder="room name"
+              aria-label="Room name"
+              title="Room name, leave blank to auto-generate"
+            />
             <button class="control-button" type="button" id="join-room-button">Join</button>
             <button class="control-button" type="button" id="ready-button" aria-pressed="false">Ready</button>
+            <button class="control-button" type="button" id="leave-room-button">Leave</button>
             <button class="control-button" type="button" id="copy-room-button">Copy</button>
             <span class="session-status" id="room-status">Solo</span>
           </div>
@@ -86,6 +96,6 @@
       </section>
     </main>
 
-    <script src="./main.js"></script>
+    <script type="module" src="./main.js"></script>
   </body>
 </html>

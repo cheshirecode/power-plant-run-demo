@@ -79,7 +79,8 @@ h1 {
   flex-wrap: wrap;
 }
 
-.demo-shell.is-gated .controls {
+.demo-shell.is-gated .style-switcher,
+.demo-shell.is-gated #replay-button {
   pointer-events: none;
   opacity: 0.45;
 }
@@ -182,7 +183,7 @@ h1 {
 
 .room-input,
 .room-select {
-  width: 72px;
+  width: 118px;
   min-height: 34px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, #000);
   background: color-mix(in srgb, var(--panel-strong) 78%, #000);
@@ -195,7 +196,7 @@ h1 {
 }
 
 .room-select {
-  width: 58px;
+  width: 104px;
   appearance: none;
 }
 

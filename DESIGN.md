@@ -154,7 +154,8 @@ The system uses tonal layering and hard borders more than soft physical elevatio
 
 ### Game Canvas
 - **Countdown:** big, blinking, and mounted visually on or near the power plant. It should beat every other label in hierarchy during repair phase.
-- **Repair Nodes:** use a glowing ring, a blocky center, and a visible numeric value. Higher-value nodes near the building may be riskier, but they must not hide inside plant details.
+- **Repair Nodes:** use a glowing radius ring, a blocky center, and a visible decimal value. Higher-value and bonus nodes should look hotter and stranger, but values should stay compact enough that a repaired map does not stretch the round into dead time.
+- **Claim Timers:** when a player claims a node, a small follow timer rides above that player. It should read like a fuse: compact, brass-led, and impossible to confuse with score.
 - **Final Scores:** after the round ends, show a scoreboard-first screen. Do not keep showing the live board as the primary surface.
 
 ## 6. Do's and Don'ts
