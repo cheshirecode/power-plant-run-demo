@@ -15,6 +15,7 @@ const styles = {
     name: "Steampunk",
     image: "assets/steampunk-reference.png",
     crop: { sx: 245, sy: 155, sw: 820, sh: 710 },
+    sceneCrop: { sx: 0, sy: 200, sw: 1301, sh: 732 },
     entrance: { x: 202, y: 137 },
     css: {
       page: "#11140f",
@@ -50,6 +51,7 @@ const styles = {
     name: "Cyberpunk",
     image: "assets/cyberpunk-reference.png",
     crop: { sx: 38, sy: 62, sw: 516, sh: 432 },
+    sceneCrop: { sx: 0, sy: 74, sw: 627, sh: 353 },
     entrance: { x: 198, y: 138 },
     css: {
       page: "#071018",
@@ -85,6 +87,7 @@ const styles = {
     name: "Futuristic",
     image: "assets/futuristic-reference.png",
     crop: { sx: 70, sy: 58, sw: 472, sh: 382 },
+    sceneCrop: { sx: 0, sy: 74, sw: 627, sh: 353 },
     entrance: { x: 200, y: 139 },
     css: {
       page: "#0c1418",
@@ -170,13 +173,100 @@ const plantPalettes = {
   },
 };
 
-const walkPath = [
-  { x: 34, y: 178 },
-  { x: 74, y: 166 },
-  { x: 116, y: 149 },
-  { x: 157, y: 131 },
-  { x: 194, y: 121 },
-  { x: 203, y: 134 },
+const DEMO_DURATION = 12800;
+const EXPLOSION_START = 7200;
+const ESCAPE_START = 8350;
+
+const squad = [
+  {
+    id: "lead",
+    gender: "male",
+    role: "rifleman",
+    enterStart: 0,
+    enterEnd: 5600,
+    exitEnd: 11600,
+    enterPath: [
+      { x: 42, y: 178 },
+      { x: 83, y: 165 },
+      { x: 126, y: 148 },
+      { x: 164, y: 135 },
+      { x: 190, y: 128 },
+      { x: 206, y: 139 },
+    ],
+    exitPath: [
+      { x: 206, y: 139 },
+      { x: 178, y: 147 },
+      { x: 130, y: 158 },
+      { x: 72, y: 181 },
+      { x: 28, y: 202 },
+    ],
+  },
+  {
+    id: "north",
+    gender: "male",
+    role: "scout",
+    enterStart: 650,
+    enterEnd: 6150,
+    exitEnd: 11950,
+    enterPath: [
+      { x: 82, y: 30 },
+      { x: 112, y: 55 },
+      { x: 145, y: 84 },
+      { x: 178, y: 113 },
+      { x: 202, y: 137 },
+    ],
+    exitPath: [
+      { x: 202, y: 137 },
+      { x: 174, y: 107 },
+      { x: 136, y: 76 },
+      { x: 94, y: 46 },
+      { x: 54, y: 22 },
+    ],
+  },
+  {
+    id: "east",
+    gender: "male",
+    role: "heavy",
+    enterStart: 1050,
+    enterEnd: 6500,
+    exitEnd: 12350,
+    enterPath: [
+      { x: 360, y: 152 },
+      { x: 322, y: 148 },
+      { x: 282, y: 143 },
+      { x: 238, y: 138 },
+      { x: 204, y: 139 },
+    ],
+    exitPath: [
+      { x: 204, y: 139 },
+      { x: 244, y: 146 },
+      { x: 290, y: 154 },
+      { x: 334, y: 170 },
+      { x: 374, y: 190 },
+    ],
+  },
+  {
+    id: "south",
+    gender: "female",
+    role: "engineer",
+    enterStart: 1450,
+    enterEnd: 6900,
+    exitEnd: 12650,
+    enterPath: [
+      { x: 222, y: 206 },
+      { x: 218, y: 184 },
+      { x: 214, y: 164 },
+      { x: 208, y: 148 },
+      { x: 202, y: 139 },
+    ],
+    exitPath: [
+      { x: 202, y: 139 },
+      { x: 218, y: 158 },
+      { x: 234, y: 178 },
+      { x: 252, y: 199 },
+      { x: 268, y: 214 },
+    ],
+  },
 ];
 
 let activeStyle = "steampunk";
@@ -184,6 +274,10 @@ let startedAt = performance.now();
 let lastStatus = "";
 const loadedSprites = {};
 const loadedTerrains = {};
+const loadedEdgeTerrains = {};
+const loadedScenes = {};
+const loadedReferenceGuards = {};
+const soldierFrameCache = {};
 
 ctx.imageSmoothingEnabled = false;
 
@@ -200,11 +294,20 @@ async function loadReferences() {
   const entries = await Promise.all(
     Object.entries(styles).map(async ([key, style]) => {
       const image = await loadImage(style.image);
+      const sprite = makeTransparentPlantSprite(image, style.crop, key);
+      const scene = makeScenePlate(image, style.sceneCrop);
+      const guard = makeReferenceGuardSprite(scene, key);
+      const staticGuard = makeReferenceGuardSprite(scene, key, getStaticGuard(key), false, isStaticGuardBackgroundPixel);
+      const cleanScene = eraseReferenceGuard(eraseReferenceGuard(scene, guard, key), staticGuard, key);
+
       return [
         key,
         {
-          sprite: makeTransparentPlantSprite(image, style.crop, key),
+          sprite,
+          edgeTerrain: makePlantEdgeTerrain(image, style.crop, sprite),
           terrain: makeReferenceTerrain(image, key),
+          scene: cleanScene,
+          guard,
         },
       ];
     }),
@@ -212,8 +315,182 @@ async function loadReferences() {
 
   for (const [key, assets] of entries) {
     loadedSprites[key] = assets.sprite;
+    loadedEdgeTerrains[key] = assets.edgeTerrain;
     loadedTerrains[key] = assets.terrain;
+    loadedScenes[key] = assets.scene;
+    loadedReferenceGuards[key] = assets.guard;
   }
+}
+
+function makeScenePlate(image, crop) {
+  const sceneCanvas = document.createElement("canvas");
+  sceneCanvas.width = VIEW.width;
+  sceneCanvas.height = VIEW.height;
+
+  const sceneCtx = sceneCanvas.getContext("2d");
+  sceneCtx.imageSmoothingEnabled = false;
+  sceneCtx.drawImage(image, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, VIEW.width, VIEW.height);
+
+  return sceneCanvas;
+}
+
+function makeReferenceGuardSprite(
+  sceneCanvas,
+  styleKey,
+  rect = getReferenceGuard(styleKey),
+  keepAllPixels = false,
+  backgroundPixelTest = isReferenceGuardBackgroundPixel,
+) {
+  const spriteCanvas = document.createElement("canvas");
+  spriteCanvas.width = rect.w;
+  spriteCanvas.height = rect.h;
+
+  const spriteCtx = spriteCanvas.getContext("2d", { willReadFrequently: true });
+  spriteCtx.imageSmoothingEnabled = false;
+  spriteCtx.drawImage(sceneCanvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+
+  const imageData = spriteCtx.getImageData(0, 0, rect.w, rect.h);
+  const { data } = imageData;
+
+  for (let offset = 0; offset < data.length; offset += 4) {
+    if (!keepAllPixels && backgroundPixelTest(data[offset], data[offset + 1], data[offset + 2], styleKey)) {
+      data[offset + 3] = 0;
+    }
+  }
+
+  spriteCtx.putImageData(imageData, 0, 0);
+  return { canvas: spriteCanvas, imageData, ...rect };
+}
+
+function eraseReferenceGuard(sceneCanvas, guard, styleKey) {
+  const cleanCanvas = document.createElement("canvas");
+  cleanCanvas.width = sceneCanvas.width;
+  cleanCanvas.height = sceneCanvas.height;
+
+  const cleanCtx = cleanCanvas.getContext("2d", { willReadFrequently: true });
+  cleanCtx.imageSmoothingEnabled = false;
+  cleanCtx.drawImage(sceneCanvas, 0, 0);
+
+  const sceneData = cleanCtx.getImageData(0, 0, sceneCanvas.width, sceneCanvas.height);
+  const guardData = guard.imageData.data;
+
+  for (let y = 0; y < guard.h; y += 1) {
+    for (let x = 0; x < guard.w; x += 1) {
+      const guardOffset = (y * guard.w + x) * 4;
+      if (guardData[guardOffset + 3] === 0) continue;
+
+      const worldX = guard.x + x;
+      const worldY = guard.y + y;
+      const replacement = sampleCleanScenePixel(sceneData, worldX, worldY, guard, styleKey);
+      const sceneOffset = (worldY * sceneData.width + worldX) * 4;
+      sceneData.data[sceneOffset] = replacement.r;
+      sceneData.data[sceneOffset + 1] = replacement.g;
+      sceneData.data[sceneOffset + 2] = replacement.b;
+      sceneData.data[sceneOffset + 3] = 255;
+    }
+  }
+
+  cleanCtx.putImageData(sceneData, 0, 0);
+  return cleanCanvas;
+}
+
+function sampleCleanScenePixel(sceneData, x, y, guard, styleKey) {
+  for (let radius = 2; radius <= 34; radius += 2) {
+    const candidates = [
+      { x: x - radius, y },
+      { x: x + radius, y },
+      { x, y: y - radius },
+      { x, y: y + radius },
+      { x: x - radius, y: y + radius },
+      { x: x + radius, y: y + radius },
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate.x < 0 || candidate.y < 0 || candidate.x >= sceneData.width || candidate.y >= sceneData.height) continue;
+      if (
+        candidate.x >= guard.x &&
+        candidate.x < guard.x + guard.w &&
+        candidate.y >= guard.y &&
+        candidate.y < guard.y + guard.h
+      ) {
+        continue;
+      }
+
+      return readScenePixel(sceneData, candidate.x, candidate.y);
+    }
+  }
+
+  return hexToRgb(styles[styleKey].scene.ground);
+}
+
+function readScenePixel(sceneData, x, y) {
+  const clampedX = clamp(Math.floor(x), 0, sceneData.width - 1);
+  const clampedY = clamp(Math.floor(y), 0, sceneData.height - 1);
+  const offset = (clampedY * sceneData.width + clampedX) * 4;
+
+  return {
+    r: sceneData.data[offset],
+    g: sceneData.data[offset + 1],
+    b: sceneData.data[offset + 2],
+  };
+}
+
+function isReferenceGuardBackgroundPixel(r, g, b, styleKey) {
+  if (styleKey === "cyberpunk") {
+    return !(b > 120 && (b > r + 18 || g > r + 18));
+  }
+
+  return !(b > 100 && b > r + 20 && b > g + 5);
+}
+
+function isStaticGuardBackgroundPixel(r, g, b, styleKey) {
+  if (styleKey === "cyberpunk") {
+    return g > 36 && b > 42 && r < 78 && g >= r * 0.8;
+  }
+
+  return g > 44 && g > r * 0.86 && g > b * 0.9;
+}
+
+function getReferenceGuardFrame(guard, phase) {
+  guard.frameCanvases ??= {};
+  if (guard.frameCanvases[phase]) return guard.frameCanvases[phase];
+
+  const source = guard.imageData.data;
+  const frame = new ImageData(guard.w, guard.h);
+  const stride = guard.w * 4;
+
+  for (let y = 0; y < guard.h; y += 1) {
+    for (let x = 0; x < guard.w; x += 1) {
+      const sourceOffset = y * stride + x * 4;
+      if (source[sourceOffset + 3] === 0) continue;
+
+      let targetX = x;
+      let targetY = y;
+
+      if (y > guard.h * 0.6) {
+        const leftLeg = x < guard.w * 0.48;
+        targetX += phase === 0 ? (leftLeg ? -1 : 1) : leftLeg ? 1 : -1;
+        if (y > guard.h * 0.82 && phase === 0) targetY += 1;
+      } else if (x > guard.w * 0.58 && y > guard.h * 0.28 && y < guard.h * 0.72) {
+        targetY += phase === 0 ? 0 : -1;
+      }
+
+      if (targetX < 0 || targetY < 0 || targetX >= guard.w || targetY >= guard.h) continue;
+
+      const targetOffset = Math.round(targetY) * stride + Math.round(targetX) * 4;
+      frame.data[targetOffset] = source[sourceOffset];
+      frame.data[targetOffset + 1] = source[sourceOffset + 1];
+      frame.data[targetOffset + 2] = source[sourceOffset + 2];
+      frame.data[targetOffset + 3] = source[sourceOffset + 3];
+    }
+  }
+
+  const frameCanvas = document.createElement("canvas");
+  frameCanvas.width = guard.w;
+  frameCanvas.height = guard.h;
+  frameCanvas.getContext("2d").putImageData(frame, 0, 0);
+  guard.frameCanvases[phase] = frameCanvas;
+  return frameCanvas;
 }
 
 function makeReferenceTerrain(image, styleKey) {
@@ -355,6 +632,85 @@ function hexToRgb(hex) {
   };
 }
 
+function makePlantEdgeTerrain(image, crop, spriteCanvas) {
+  const edgeCanvas = document.createElement("canvas");
+  edgeCanvas.width = crop.sw;
+  edgeCanvas.height = crop.sh;
+
+  const sourceCanvas = document.createElement("canvas");
+  sourceCanvas.width = crop.sw;
+  sourceCanvas.height = crop.sh;
+
+  const sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  sourceCtx.imageSmoothingEnabled = false;
+  sourceCtx.drawImage(image, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.sw, crop.sh);
+
+  const spriteCtx = spriteCanvas.getContext("2d", { willReadFrequently: true });
+  const spriteData = spriteCtx.getImageData(0, 0, crop.sw, crop.sh);
+  const sourceData = sourceCtx.getImageData(0, 0, crop.sw, crop.sh);
+  const edgeCtx = edgeCanvas.getContext("2d", { willReadFrequently: true });
+  const edgeData = edgeCtx.createImageData(crop.sw, crop.sh);
+  const distanceToPlant = computePlantDistanceMap(spriteData, crop.sw, crop.sh, 58);
+
+  for (let index = 0; index < distanceToPlant.length; index += 1) {
+    const sourceOffset = index * 4;
+    const distance = distanceToPlant[index];
+    const spriteAlpha = spriteData.data[sourceOffset + 3];
+
+    if (spriteAlpha > 0 || distance < 0) continue;
+
+    const fade = clamp((58 - distance) / 58, 0, 1);
+    const alpha = Math.round(210 * fade * fade);
+    edgeData.data[sourceOffset] = sourceData.data[sourceOffset];
+    edgeData.data[sourceOffset + 1] = sourceData.data[sourceOffset + 1];
+    edgeData.data[sourceOffset + 2] = sourceData.data[sourceOffset + 2];
+    edgeData.data[sourceOffset + 3] = alpha;
+  }
+
+  edgeCtx.putImageData(edgeData, 0, 0);
+  return edgeCanvas;
+}
+
+function computePlantDistanceMap(spriteData, width, height, maxDistance) {
+  const total = width * height;
+  const distances = new Int16Array(total);
+  const queue = new Int32Array(total);
+  let head = 0;
+  let tail = 0;
+
+  distances.fill(-1);
+
+  function push(index, distance) {
+    if (index < 0 || index >= total || distances[index] !== -1) return;
+    distances[index] = distance;
+    queue[tail] = index;
+    tail += 1;
+  }
+
+  for (let index = 0; index < total; index += 1) {
+    if (spriteData.data[index * 4 + 3] > 0) {
+      push(index, 0);
+    }
+  }
+
+  while (head < tail) {
+    const index = queue[head];
+    head += 1;
+
+    const distance = distances[index];
+    if (distance >= maxDistance) continue;
+
+    const x = index % width;
+    const y = Math.floor(index / width);
+    if (x > 0) push(index - 1, distance + 1);
+    if (x < width - 1) push(index + 1, distance + 1);
+    if (y > 0) push(index - width, distance + 1);
+    if (y < height - 1) push(index + width, distance + 1);
+  }
+
+  return distances;
+}
+
 function makeTransparentPlantSprite(image, crop, styleKey) {
   const spriteCanvas = document.createElement("canvas");
   spriteCanvas.width = crop.sw;
@@ -486,10 +842,12 @@ function hash2d(x, y, seed = 0) {
   return value - Math.floor(value);
 }
 
-function setStatus(progress) {
-  let next = "Approaching the plant";
-  if (progress > 0.74) next = "Entering the plant";
-  if (progress >= 0.98) next = "Inside the power plant";
+function setStatus(elapsed) {
+  let next = "Squad approaching";
+  if (elapsed > 5100) next = "Entering the plant";
+  if (elapsed >= EXPLOSION_START) next = "Plant detonation";
+  if (elapsed >= ESCAPE_START) next = "Squad escaping";
+  if (elapsed >= DEMO_DURATION) next = "Everyone clear";
 
   if (next !== lastStatus) {
     statusText.textContent = next;
@@ -563,7 +921,7 @@ function drawPath(colors) {
   ctx.globalAlpha = 0.34;
   ctx.fillStyle = "#fff8c9";
   for (let i = 0; i < 28; i += 1) {
-    const p = getPointOnPath(walkPath, i / 28);
+    const p = getPointOnPath(squad[0].enterPath, i / 28);
     const jitter = hash2d(i, i + 3) * 10 - 5;
     ctx.fillRect(Math.round(p.x + jitter), Math.round(p.y + 4), 5, 2);
   }
@@ -743,20 +1101,27 @@ function drawPixelCircle(cx, cy, radius, fill, edge) {
   }
 }
 
-function drawPlant(style, time, progress) {
+function drawPlant(style, time, progress, elapsed) {
+  drawNativePlant(style, time, progress, elapsed);
+}
+
+function drawSceneEntrance(style, progress, time) {
   const colors = style.scene;
-  const palette = plantPalettes[activeStyle];
-  const sprite = loadedSprites[activeStyle];
+  const open = clamp((progress - 0.79) / 0.16, 0, 1);
 
-  if (!sprite) {
-    drawNativePlant(style, time, progress);
-    return;
-  }
+  if (open <= 0) return;
 
-  drawPlantShadow(colors);
-  drawGroundContact(colors);
-  ctx.drawImage(sprite, plantRect.x, plantRect.y, plantRect.w, plantRect.h);
-  drawEntrance(style, palette, progress, time);
+  const flicker = 0.45 + Math.sin(time / 95) * 0.18;
+  const scan = Math.floor(time / 130) % 3;
+  ctx.globalAlpha = open * flicker;
+  ctx.fillStyle = colors.glow;
+  ctx.fillRect(style.entrance.x - 1, style.entrance.y - 10, 2, 2);
+  ctx.fillRect(style.entrance.x - 4, style.entrance.y - 6 + scan, 8, 1);
+  ctx.fillRect(style.entrance.x - 2, style.entrance.y - 2, 4, 1);
+  ctx.globalAlpha = open * 0.22;
+  ctx.fillRect(style.entrance.x - 6, style.entrance.y - 8, 2, 2);
+  ctx.fillRect(style.entrance.x + 4, style.entrance.y - 4, 2, 2);
+  ctx.globalAlpha = 1;
 }
 
 function drawGroundContact(colors) {
@@ -766,10 +1131,21 @@ function drawGroundContact(colors) {
   ctx.globalAlpha = 1;
 }
 
-function drawNativePlant(style, time, progress) {
+function drawNativePlant(style, time, progress, elapsed = 0) {
   const colors = style.scene;
   const palette = plantPalettes[activeStyle];
+  const damage = clamp((elapsed - EXPLOSION_START) / 1550, 0, 1);
 
+  if (damage >= 0.82) {
+    drawDestroyedPlant(style, palette, elapsed, time);
+    return;
+  }
+
+  ctx.save();
+  if (damage > 0) {
+    const shake = Math.ceil((1 - damage) * 5);
+    ctx.translate((hash2d(Math.floor(time / 42), 1, activeStyle.length) - 0.5) * shake, (hash2d(2, Math.floor(time / 42), activeStyle.length) - 0.5) * shake);
+  }
   drawPlantShadow(colors);
   drawPlantPad(colors, palette);
   drawPlantBackPipes(palette);
@@ -778,6 +1154,11 @@ function drawNativePlant(style, time, progress) {
   drawCoreOrb(palette, time);
   drawPlantFrontDetails(palette, time);
   drawEntrance(style, palette, progress, time);
+
+  if (damage > 0) {
+    drawPlantDamageScars(style, palette, damage, time);
+  }
+  ctx.restore();
 }
 
 function drawPlantShadow(colors) {
@@ -979,6 +1360,107 @@ function drawPlantFrontDetails(palette, time) {
   }
 }
 
+function drawPlantDamageScars(style, palette, damage, time) {
+  const ember = Math.sin(time / 80) > 0 ? "#ff6b28" : "#fff6cf";
+  ctx.globalAlpha = 0.55 + damage * 0.25;
+  drawPixelLine(206, 51, 229, 81, 3, "#180e0a");
+  drawPixelLine(282, 66, 253, 98, 3, "#180e0a");
+  drawPixelLine(316, 73, 292, 116, 3, "#180e0a");
+  ctx.globalAlpha = 1;
+
+  for (let i = 0; i < 10; i += 1) {
+    const x = 176 + Math.floor(hash2d(i, 11, activeStyle.length) * 150);
+    const y = 65 + Math.floor(hash2d(i, 17, activeStyle.length) * 72);
+    px(x, y, 2 + (i % 2), 2, i % 3 === 0 ? ember : palette.bodyDark);
+  }
+}
+
+function drawDestroyedPlant(style, palette, elapsed, time) {
+  const colors = style.scene;
+  const ruinAge = clamp((elapsed - EXPLOSION_START - 1200) / 3800, 0, 1);
+
+  drawPlantShadow(colors);
+  drawDestroyedPad(colors, palette);
+  drawCollapsedStructure(palette, time);
+  drawDebrisField(style, palette, elapsed);
+  drawRuinSmoke(style, ruinAge, time);
+}
+
+function drawDestroyedPad(colors, palette) {
+  px(154, 123, 178, 7, palette.bodyDark);
+  px(168, 117, 135, 5, palette.body);
+  px(188, 111, 87, 5, palette.bodyDark);
+  px(177, 132, 130, 5, palette.trimDark);
+
+  for (let i = 0; i < 7; i += 1) {
+    const x = 165 + i * 23;
+    drawPixelLine(x, 112 + (i % 3) * 5, x + 16, 134 - (i % 2) * 4, 2, "#120c09");
+  }
+
+  px(186, 139, 98, 4, colors.pathDark);
+  px(194, 139, 84, 2, colors.path);
+}
+
+function drawCollapsedStructure(palette, time) {
+  drawPipe(
+    [
+      { x: 180, y: 78 },
+      { x: 213, y: 101 },
+      { x: 246, y: 127 },
+    ],
+    5,
+    palette.pipe,
+    palette.pipeDark,
+  );
+  drawPipe(
+    [
+      { x: 314, y: 66 },
+      { x: 298, y: 98 },
+      { x: 269, y: 130 },
+    ],
+    5,
+    palette.pipe,
+    palette.pipeDark,
+  );
+
+  px(171, 84, 34, 13, palette.bodyDark);
+  px(176, 78, 28, 9, palette.body);
+  px(181, 75, 21, 4, palette.roof);
+  px(289, 90, 41, 18, palette.bodyDark);
+  px(294, 85, 33, 9, palette.body);
+  px(301, 80, 21, 5, palette.trim);
+
+  const flicker = Math.sin(time / 75) > 0;
+  px(222, 100, 34, 18, flicker ? "#ff6b28" : palette.core);
+  px(230, 94, 19, 11, flicker ? "#fff6cf" : palette.coreBright);
+  px(236, 115, 9, 14, palette.coreDark);
+}
+
+function drawDebrisField(style, palette, elapsed) {
+  const colors = [palette.bodyDark, palette.body, palette.trimDark, palette.pipe, style.scene.rock, "#2b1a11"];
+  const spread = clamp((elapsed - EXPLOSION_START) / 1800, 0, 1);
+
+  for (let i = 0; i < 70; i += 1) {
+    const angle = hash2d(i, 23, activeStyle.length) * Math.PI * 2;
+    const distance = (20 + hash2d(i, 29, activeStyle.length) * 88) * spread;
+    const x = 240 + Math.cos(angle) * distance;
+    const y = 108 + Math.sin(angle) * distance * 0.55 + hash2d(i, 31, activeStyle.length) * 18;
+    const w = 2 + Math.floor(hash2d(i, 37, activeStyle.length) * 6);
+    const h = 2 + Math.floor(hash2d(i, 41, activeStyle.length) * 4);
+    px(x, y, w, h, colors[i % colors.length]);
+  }
+}
+
+function drawRuinSmoke(style, ruinAge, time) {
+  ctx.globalAlpha = 0.46 * (1 - ruinAge * 0.35);
+  for (let i = 0; i < 16; i += 1) {
+    const x = 186 + i * 8 + Math.sin(time / 260 + i) * 5;
+    const y = 78 - ruinAge * 34 - hash2d(i, 47, activeStyle.length) * 18;
+    px(x, y, 12 + (i % 3) * 3, 6 + (i % 2) * 3, "rgb(36 35 31)");
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawEntrance(style, palette, progress, time) {
   const colors = style.scene;
   const open = clamp((progress - 0.79) / 0.16, 0, 1);
@@ -999,56 +1481,387 @@ function drawEntrance(style, palette, progress, time) {
   px(x - 9, y + 8, 22, 2, colors.path);
 }
 
-function drawSoldier(style, progress, time) {
-  if (progress > 0.92) return;
+function drawSquad(style, elapsed, time) {
+  const actors = squad
+    .map((member, index) => getSquadMemberState(member, index, elapsed, time))
+    .filter(Boolean)
+    .sort((a, b) => a.y - b.y);
 
-  const eased = easeInOut(clamp(progress / 0.92, 0, 1));
-  const position = getPointOnPath(walkPath, eased);
-  const step = Math.floor(time / 120) % 2;
-  const bob = step === 0 ? 0 : -1;
-  const fade = progress > 0.84 ? 1 - clamp((progress - 0.84) / 0.08, 0, 1) * 0.35 : 1;
-  const colors = style.scene.soldier;
+  for (const actor of actors) {
+    drawPixelSoldierSprite(style, actor, time);
+  }
+}
 
-  ctx.globalAlpha = fade;
-  ctx.fillStyle = "rgba(0, 0, 0, 0.36)";
-  ctx.fillRect(Math.round(position.x - 8), Math.round(position.y + 3), 21, 5);
+function getSquadMemberState(member, index, elapsed, time) {
+  const escapeStart = ESCAPE_START + index * 140;
 
-  const x = Math.round(position.x);
-  const y = Math.round(position.y + bob);
+  if (elapsed < member.enterStart) return null;
 
-  ctx.fillStyle = colors.boot;
-  ctx.fillRect(x - 4, y - 2, 4, 7);
-  ctx.fillRect(x + 4, y - 1 + step, 4, 6);
-  ctx.fillRect(x - 6, y + 4, 7, 2);
-  ctx.fillRect(x + 3, y + 5, 7, 2);
+  if (elapsed <= member.enterEnd) {
+    const progress = easeInOut(clamp((elapsed - member.enterStart) / (member.enterEnd - member.enterStart), 0, 1));
+    const position = getPointOnPath(member.enterPath, progress);
+    return {
+      ...position,
+      member,
+      phase: "enter",
+      progress,
+      step: Math.floor((time + index * 55) / 120) % 2,
+      fade: progress > 0.82 ? 1 - clamp((progress - 0.82) / 0.18, 0, 1) * 0.9 : 1,
+      dissolve: clamp((progress - 0.78) / 0.2, 0, 1),
+    };
+  }
 
-  ctx.fillStyle = colors.armor;
-  ctx.fillRect(x - 5, y - 15, 12, 13);
-  ctx.fillRect(x - 7, y - 12, 4, 8);
-  ctx.fillRect(x + 7, y - 11, 4, 7);
+  if (elapsed < escapeStart) return null;
 
-  ctx.fillStyle = colors.armorLight;
-  ctx.fillRect(x - 2, y - 14, 7, 3);
-  ctx.fillRect(x + 6, y - 9, 3, 2);
+  if (elapsed <= member.exitEnd) {
+    const progress = easeInOut(clamp((elapsed - escapeStart) / (member.exitEnd - escapeStart), 0, 1));
+    const position = getPointOnPath(member.exitPath, progress);
+    return {
+      ...position,
+      member,
+      phase: "escape",
+      progress,
+      step: Math.floor((time + index * 80) / 95) % 2,
+      fade: 1,
+      dissolve: 0,
+    };
+  }
 
-  ctx.fillStyle = colors.armor;
-  ctx.fillRect(x - 4, y - 23, 10, 7);
-  ctx.fillRect(x - 2, y - 26, 6, 3);
+  return null;
+}
 
-  ctx.fillStyle = colors.visor;
-  ctx.fillRect(x + 2, y - 21, 6, 2);
+function drawPixelSoldierSprite(style, actor, time) {
+  const x = Math.round(actor.x);
+  const y = Math.round(actor.y + (actor.step === 0 ? 0 : -1));
+  const frames = getSoldierFrames(style, actor.member);
+  const step = actor.step;
+  const frame = frames[step % frames.length];
+  const scale = 1;
+  const drawX = x - Math.floor(frame.width / 2);
+  const drawY = y - frame.height + 5;
 
-  ctx.fillStyle = colors.weapon;
-  ctx.fillRect(x + 10, y - 13, 14, 2);
-  ctx.fillRect(x + 21, y - 15, 5, 1);
-  ctx.fillRect(x + 11, y - 11, 5, 4);
+  ctx.globalAlpha = actor.fade;
+  drawPixelShadow(x, y, actor.phase);
+  ctx.drawImage(frame.canvas, drawX, drawY);
+  drawCharacterMotionDetails(style, actor, x, y, time);
 
-  if (activeStyle === "cyberpunk") {
-    ctx.fillStyle = style.scene.glow;
-    ctx.fillRect(x + 25, y - 15, 2, 2);
+  if (activeStyle === "cyberpunk" && Math.sin(time / 80) > 0.1) {
+    px(x + 17, y - 19, 2 * scale, 2 * scale, style.scene.glow);
+  }
+
+  if (actor.phase === "enter" && actor.dissolve > 0) {
+    punchSoldierPixelsIntoDoor(frame, drawX, drawY, style, actor.dissolve, time);
+  }
+
+  if (actor.phase === "escape" && Math.sin(time / 75 + x) > 0.2) {
+    px(x - 12, y - 18, 2, 2, style.scene.glow);
   }
 
   ctx.globalAlpha = 1;
+}
+
+function drawCharacterMotionDetails(style, actor, x, y, time) {
+  const colors = getCharacterColors(style, actor.member);
+
+  if (actor.member.role === "scout") {
+    const blink = Math.sin(time / 90) > 0 ? colors.glow : colors.armorLight;
+    px(x - 12, y - 28, 2, 2, blink);
+    px(x - 15, y - 30, 2, 1, blink);
+  } else if (actor.member.role === "heavy") {
+    px(x - 15, y - 20, 4, 12, colors.accent);
+    px(x + 13, y - 18, 7, 3, colors.weapon);
+    px(x + 18, y - 20, 4, 1, colors.weapon);
+  } else if (actor.member.role === "engineer") {
+    const spark = Math.sin(time / 110) > 0;
+    px(x - 13, y - 15, 5, 7, colors.glow);
+    if (spark) {
+      px(x + 15, y - 13, 2, 2, colors.white);
+      px(x + 18, y - 15, 2, 1, colors.accent);
+    }
+  } else {
+    px(x - 12, y - 25, 3, 6, colors.accent);
+  }
+}
+
+function drawPixelShadow(x, y, phase) {
+  const shrink = phase === "enter" ? 0.85 : 1;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.38)";
+  ctx.fillRect(Math.round(x - 9 * shrink), Math.round(y + 3), Math.round(20 * shrink), 4);
+  ctx.fillRect(Math.round(x - 5 * shrink), Math.round(y + 6), Math.round(10 * shrink), 2);
+}
+
+function getSoldierFrames(style, member) {
+  const key = `${activeStyle}:${member.gender}:${member.id}:${member.role}`;
+  if (soldierFrameCache[key]) return soldierFrameCache[key];
+
+  const colors = getCharacterColors(style, member);
+  const frames = [0, 1].map((step) => makeSoldierFrame(colors, step, member));
+  soldierFrameCache[key] = frames;
+  return frames;
+}
+
+function getCharacterColors(style, member) {
+  const colors = { ...style.scene.soldier };
+  colors.accent = style.scene.accent;
+  colors.glow = style.scene.glow;
+  colors.white = "#f4f1dd";
+  colors.dark = "#0b0d0c";
+
+  if (member.role === "engineer") {
+    colors.armorLight = style.scene.accent;
+    colors.visor = style.css.accent2;
+    colors.armor = style.css.strong;
+  } else if (member.role === "scout") {
+    colors.armorLight = style.scene.glow;
+    colors.armor = style.scene.groundDark;
+  } else if (member.role === "heavy") {
+    colors.visor = style.scene.accent;
+    colors.armor = style.scene.shadow;
+    colors.armorLight = style.scene.rock;
+  } else {
+    colors.accent = style.css.accent;
+  }
+
+  return colors;
+}
+
+function makeSoldierFrame(colors, step, member) {
+  const width = 34;
+  const height = 36;
+  const imageData = new ImageData(width, height);
+
+  function pixel(x, y, color) {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const rgb = color.startsWith("#") ? hexToRgb(color) : parseRgbString(color);
+    const offset = (Math.round(y) * width + Math.round(x)) * 4;
+    imageData.data[offset] = rgb.r;
+    imageData.data[offset + 1] = rgb.g;
+    imageData.data[offset + 2] = rgb.b;
+    imageData.data[offset + 3] = 255;
+  }
+
+  function rect(x, y, w, h, color) {
+    for (let yy = 0; yy < h; yy += 1) {
+      for (let xx = 0; xx < w; xx += 1) {
+        pixel(x + xx, y + yy, color);
+      }
+    }
+  }
+
+  const legA = step === 0 ? 0 : 2;
+  const legB = step === 0 ? 2 : 0;
+
+  if (member.role === "heavy") {
+    rect(10, 4, 12, 6, colors.armor);
+    rect(12, 1, 8, 4, colors.armorLight);
+    rect(19, 5, 8, 2, colors.visor);
+    rect(7, 10, 18, 14, colors.armor);
+    rect(9, 11, 12, 4, colors.armorLight);
+    rect(4, 12, 5, 10, colors.armor);
+    rect(25, 12, 5, 10, colors.armor);
+    rect(9, 24, 5, 7 + legA, colors.boot);
+    rect(19, 24, 5, 7 + legB, colors.boot);
+    rect(6, 31 + legA, 9, 3, colors.boot);
+    rect(19, 31 + legB, 9, 3, colors.boot);
+    rect(24, 15, 9, 3, colors.weapon);
+    rect(29, 12, 5, 2, colors.weapon);
+    rect(27, 18, 5, 5, colors.weapon);
+    rect(5, 9, 3, 15, colors.accent);
+  } else if (member.role === "scout") {
+    rect(12, 5, 8, 4, colors.armor);
+    rect(14, 2, 5, 3, colors.armorLight);
+    rect(18, 6, 6, 1, colors.visor);
+    rect(11, 10, 10, 12, colors.armor);
+    rect(13, 11, 6, 3, colors.armorLight);
+    rect(8, 12, 3, 7, colors.armor);
+    rect(21, 13, 3, 6, colors.armor);
+    rect(12, 22, 3, 8 + legA, colors.boot);
+    rect(18, 22, 3, 8 + legB, colors.boot);
+    rect(9, 30 + legA, 6, 2, colors.boot);
+    rect(18, 30 + legB, 6, 2, colors.boot);
+    rect(23, 14, 10, 1, colors.weapon);
+    rect(26, 11, 2, 2, colors.glow);
+    rect(7, 8, 3, 3, colors.glow);
+  } else if (member.role === "engineer") {
+    rect(11, 5, 9, 5, colors.armor);
+    rect(13, 1, 6, 4, colors.accent);
+    rect(17, 6, 7, 2, colors.visor);
+    rect(10, 10, 11, 13, colors.armor);
+    rect(12, 11, 6, 3, colors.armorLight);
+    rect(7, 13, 4, 7, colors.armor);
+    rect(21, 13, 4, 7, colors.armor);
+    rect(10, 23, 4, 7 + legA, colors.boot);
+    rect(18, 23, 4, 7 + legB, colors.boot);
+    rect(8, 30 + legA, 7, 2, colors.boot);
+    rect(18, 30 + legB, 7, 2, colors.boot);
+    rect(23, 15, 4, 2, colors.weapon);
+    rect(27, 14, 4, 1, colors.weapon);
+    rect(25, 17, 3, 7, colors.accent);
+    rect(6, 19, 5, 5, colors.glow);
+  } else {
+    rect(11, 4, 9, 5, colors.armor);
+    rect(13, 1, 6, 3, colors.armor);
+    rect(17, 5, 7, 2, colors.visor);
+    rect(9, 10, 13, 13, colors.armor);
+    rect(12, 11, 8, 3, colors.armorLight);
+    rect(7, 12, 4, 8, colors.armor);
+    rect(21, 13, 4, 7, colors.armor);
+    rect(11, 23, 4, 7 + legA, colors.boot);
+    rect(18, 23, 4, 7 + legB, colors.boot);
+    rect(8, 30 + legA, 7, 2, colors.boot);
+    rect(18, 30 + legB, 7, 2, colors.boot);
+    rect(23, 15, 6, 2, colors.weapon);
+    rect(27, 13, 3, 1, colors.weapon);
+    rect(24, 17, 3, 4, colors.weapon);
+    rect(8, 8, 3, 3, colors.accent);
+  }
+
+  const canvasFrame = document.createElement("canvas");
+  canvasFrame.width = width;
+  canvasFrame.height = height;
+  canvasFrame.getContext("2d").putImageData(imageData, 0, 0);
+
+  return { canvas: canvasFrame, imageData, width, height };
+}
+
+function parseRgbString(color) {
+  const match = color.match(/\d+/g);
+  if (!match) return { r: 255, g: 255, b: 255 };
+  return {
+    r: Number(match[0]),
+    g: Number(match[1]),
+    b: Number(match[2]),
+  };
+}
+
+function punchSoldierPixelsIntoDoor(frame, drawX, drawY, style, dissolve, time) {
+  const targetX = style.entrance.x;
+  const targetY = style.entrance.y - 8;
+  const glow = hexToRgb(style.scene.glow);
+
+  for (let y = 0; y < frame.height; y += 2) {
+    for (let x = 0; x < frame.width; x += 2) {
+      const sourceOffset = (y * frame.width + x) * 4;
+      if (frame.imageData.data[sourceOffset + 3] === 0) continue;
+      if (hash2d(x, y, Math.floor(time / 60)) > dissolve) continue;
+
+      const worldX = Math.round(drawX + x + (targetX - (drawX + frame.width / 2)) * dissolve);
+      const worldY = Math.round(drawY + y + (targetY - (drawY + frame.height / 2)) * dissolve);
+      const alpha = 1 - dissolve * 0.45;
+
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = `rgb(${glow.r} ${glow.g} ${glow.b})`;
+      ctx.fillRect(worldX, worldY, 2, 2);
+    }
+  }
+
+  ctx.globalAlpha = 1;
+}
+
+function drawExplosion(style, elapsed, time) {
+  if (elapsed < EXPLOSION_START) return;
+
+  const blast = clamp((elapsed - EXPLOSION_START) / 1050, 0, 1);
+  const smoke = clamp((elapsed - EXPLOSION_START) / 3600, 0, 1);
+  const centerX = style.entrance.x + 26;
+  const centerY = style.entrance.y - 34;
+  const glow = hexToRgb(style.scene.glow);
+
+  if (blast < 1) {
+    ctx.globalAlpha = 0.9 * (1 - blast);
+    drawPixelCircle(centerX, centerY, 24 + Math.floor(blast * 50), "#ff6b28");
+    ctx.globalAlpha = 0.72 * (1 - blast);
+    drawPixelCircle(centerX + 6, centerY - 2, 18 + Math.floor(blast * 40), style.scene.glow);
+    ctx.globalAlpha = 0.95 * (1 - blast);
+    drawPixelCircle(centerX - 5, centerY + 2, 10 + Math.floor(blast * 18), "#fff6cf");
+    ctx.globalAlpha = 1;
+  }
+
+  const flame = clamp(1 - (elapsed - EXPLOSION_START) / 4200, 0, 1);
+  if (flame > 0) {
+    for (let i = 0; i < 9; i += 1) {
+      const x = centerX - 34 + i * 8;
+      const h = 10 + Math.floor(hash2d(i, Math.floor(time / 120), activeStyle.length) * 18 * flame);
+      ctx.globalAlpha = 0.72 * flame;
+      px(x, centerY + 20 - h, 5, h, i % 2 === 0 ? "#ff6b28" : "#d62818");
+      ctx.globalAlpha = 0.9 * flame;
+      px(x + 1, centerY + 22 - h, 3, Math.max(3, Math.floor(h * 0.45)), "#fff6cf");
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  const shardColors = ["#fff6cf", "#ff6b28", "#d62818", style.scene.accent, style.scene.glow, "#2a1b10", "#7f6b43"];
+  for (let i = 0; i < 42; i += 1) {
+    const angle = hash2d(i, 2, activeStyle.length) * Math.PI * 2;
+    const speed = 22 + hash2d(i, 5, activeStyle.length) * 56;
+    const distance = speed * Math.min(1.35, (elapsed - EXPLOSION_START) / 950);
+    const x = centerX + Math.cos(angle) * distance;
+    const y = centerY + Math.sin(angle) * distance + blast * blast * 18;
+    const size = 1 + Math.floor(hash2d(i, 9, activeStyle.length) * 4);
+    const alpha = clamp(1 - (elapsed - EXPLOSION_START) / 2600, 0, 1);
+
+    ctx.globalAlpha = alpha;
+    px(x, y, size, size, shardColors[i % shardColors.length]);
+  }
+
+  for (let i = 0; i < 18; i += 1) {
+    const drift = (elapsed - EXPLOSION_START) / 110;
+    const x = centerX - 52 + i * 6 + Math.sin(time / 240 + i) * 4;
+    const y = centerY - 8 - smoke * 32 - hash2d(i, 4, activeStyle.length) * 18 + (drift % 5);
+    const alpha = 0.48 * clamp(smoke, 0, 1) * clamp(1 - smoke * 0.45, 0, 1);
+
+    ctx.globalAlpha = alpha;
+    px(x, y, 10 + (i % 3) * 2, 6 + (i % 2) * 2, "rgb(33 34 31)");
+  }
+
+  ctx.globalAlpha = 1;
+}
+
+function drawReferenceGuardPixelMotion(style, time) {
+  if (!loadedScenes[activeStyle]) return;
+
+  const guard = loadedReferenceGuards[activeStyle];
+  if (!guard) return;
+
+  const phase = Math.floor(time / 260) % 2;
+  const frame = getReferenceGuardFrame(guard, phase);
+  const drawX = guard.x + (phase === 0 ? -1 : 0);
+  const drawY = guard.y + (phase === 0 ? 0 : -1);
+  const colors = style.scene.soldier;
+  const glow = style.scene.glow;
+
+  ctx.globalAlpha = 0.58;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.34)";
+  ctx.fillRect(guard.x - 3, guard.y + guard.h - 4, guard.w + 8, 3);
+  ctx.globalAlpha = 1;
+
+  ctx.drawImage(frame, drawX, drawY);
+
+  const weaponLift = phase === 0 ? 0 : -1;
+  const legY = drawY + guard.h - 4;
+  px(drawX + 5, legY + (phase === 0 ? 0 : 1), 3, 4, colors.boot);
+  px(drawX + 12, legY + (phase === 0 ? 1 : 0), 3, 4, colors.boot);
+  px(drawX + 4, legY + 4 + (phase === 0 ? 0 : 1), 6, 1, colors.boot);
+  px(drawX + 11, legY + 4 + (phase === 0 ? 1 : 0), 6, 1, colors.boot);
+  px(drawX + Math.floor(guard.w * 0.42), drawY + 3, 5, 1, colors.visor);
+  px(drawX + Math.floor(guard.w * 0.62), drawY + Math.floor(guard.h * 0.54) + weaponLift, 8, 1, colors.weapon);
+
+  if (Math.sin(time / 180) > 0.45) {
+    px(drawX + guard.w - 1, drawY + Math.floor(guard.h * 0.48) + weaponLift, 2, 2, glow);
+    px(drawX + guard.w + 2, drawY + Math.floor(guard.h * 0.48) + weaponLift, 4, 1, glow);
+  }
+}
+
+function getReferenceGuard(styleKey) {
+  if (styleKey === "steampunk") return { x: 178, y: 130, w: 22, h: 15 };
+  if (styleKey === "cyberpunk") return { x: 184, y: 132, w: 24, h: 18 };
+  return { x: 184, y: 132, w: 24, h: 18 };
+}
+
+function getStaticGuard(styleKey) {
+  if (styleKey === "steampunk") return { x: 312, y: 158, w: 58, h: 49 };
+  if (styleKey === "cyberpunk") return { x: 318, y: 158, w: 58, h: 50 };
+  return { x: 318, y: 158, w: 58, h: 50 };
 }
 
 function drawVignette(style) {
@@ -1069,12 +1882,14 @@ function drawVignette(style) {
 function render(now) {
   const style = styles[activeStyle];
   const elapsed = now - startedAt;
-  const progress = clamp(elapsed / 7200, 0, 1);
+  const plantProgress = clamp(elapsed / 7200, 0, 1);
+  const cappedElapsed = Math.min(elapsed, DEMO_DURATION);
 
-  setStatus(progress);
+  setStatus(cappedElapsed);
   drawBackground(style, now);
-  drawPlant(style, now, progress);
-  drawSoldier(style, progress, now);
+  drawPlant(style, now, plantProgress, cappedElapsed);
+  drawExplosion(style, cappedElapsed, now);
+  drawSquad(style, cappedElapsed, now);
   drawVignette(style);
 
   requestAnimationFrame(render);
