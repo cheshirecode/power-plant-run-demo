@@ -51,16 +51,21 @@ button {
   min-width: 0;
   margin: 0 auto;
   display: flex;
-  align-items: end;
+  align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 14px;
+}
+
+.topbar > div:first-child {
+  flex: 0 0 190px;
 }
 
 h1 {
   margin: 0;
-  font-size: clamp(1.55rem, 1.25rem + 1vw, 2.25rem);
+  font-size: clamp(1.25rem, 1.08rem + 0.65vw, 1.7rem);
   line-height: 1.05;
   letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .topbar p {
@@ -74,10 +79,18 @@ h1 {
 .controls {
   display: flex;
   min-width: 0;
+  flex: 1 1 auto;
+  max-width: 960px;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow: visible;
+  padding: 4px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-bg) 88%, #000);
+  box-shadow: 0 12px 28px var(--shadow);
+  scrollbar-width: thin;
 }
 
 .demo-shell.is-gated .style-switcher,
@@ -90,17 +103,15 @@ h1 {
 .room-controls {
   display: flex;
   min-width: 0;
-  min-height: 42px;
+  min-height: 34px;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-bg) 86%, #000);
-  box-shadow: 0 12px 28px var(--shadow);
+  padding: 0;
 }
 
 .session-status {
-  max-width: 130px;
+  max-width: 108px;
   overflow: hidden;
   color: var(--muted);
   font-size: 0.72rem;
@@ -112,8 +123,8 @@ h1 {
 .room-field {
   position: relative;
   display: block;
-  width: 230px;
-  min-width: 180px;
+  width: 150px;
+  min-width: 130px;
 }
 
 .room-field span {
@@ -131,17 +142,16 @@ h1 {
 .style-switcher {
   display: flex;
   min-width: 0;
-  min-height: 42px;
-  padding: 4px;
+  min-height: 34px;
+  flex: 0 0 auto;
+  padding: 0;
   gap: 4px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-bg) 86%, #000);
-  box-shadow: 0 12px 28px var(--shadow);
 }
 
 .control-button,
 .style-button,
-.replay-button {
+.replay-button,
+.action-menu summary {
   min-height: 34px;
   border: 1px solid transparent;
   color: var(--text);
@@ -154,13 +164,74 @@ h1 {
 }
 
 .control-button {
-  padding: 0 10px;
-  font-size: 0.76rem;
+  padding: 0 8px;
+  font-size: 0.72rem;
   line-height: 1;
 }
 
+.action-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.action-menu summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  font-size: 0.76rem;
+  line-height: 1;
+  list-style: none;
+}
+
+.action-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.action-menu summary::after {
+  width: 0;
+  height: 0;
+  border-top: 5px solid var(--muted);
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+  content: "";
+}
+
+.action-menu[open] summary {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel-strong));
+}
+
+.action-menu.is-active summary {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+}
+
+.action-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 5;
+  display: grid;
+  width: 188px;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-bg) 94%, #000);
+  box-shadow: 0 16px 32px var(--shadow);
+}
+
+.action-menu-panel .control-button {
+  width: 100%;
+  justify-content: flex-start;
+  border-color: color-mix(in srgb, var(--border) 70%, #000);
+  background: color-mix(in srgb, var(--panel-strong) 62%, #000);
+  text-align: left;
+}
+
 .control-button:disabled,
-.room-input:disabled {
+.room-input:disabled,
+.bot-toggle:has(input:disabled),
+.action-menu-panel .control-button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
 }
@@ -168,9 +239,9 @@ h1 {
 .style-button {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  font-size: 0.82rem;
+  gap: 6px;
+  padding: 0 9px;
+  font-size: 0.74rem;
   line-height: 1;
 }
 
@@ -179,7 +250,9 @@ h1 {
 .style-button:hover,
 .style-button:focus-visible,
 .replay-button:hover,
-.replay-button:focus-visible {
+.replay-button:focus-visible,
+.action-menu summary:hover,
+.action-menu summary:focus-visible {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 72%, var(--text));
   background: color-mix(in srgb, var(--panel-strong) 82%, var(--accent));
@@ -187,7 +260,8 @@ h1 {
 
 .control-button:active,
 .style-button:active,
-.replay-button:active {
+.replay-button:active,
+.action-menu summary:active {
   transform: translateY(1px);
 }
 
@@ -203,7 +277,7 @@ h1 {
 
 .room-input,
 .room-select {
-  width: 118px;
+  width: 108px;
   min-height: 34px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, #000);
   background: color-mix(in srgb, var(--panel-strong) 78%, #000);
@@ -215,13 +289,40 @@ h1 {
   text-transform: lowercase;
 }
 
+.bot-toggle {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, #000);
+  background: color-mix(in srgb, var(--panel-strong) 62%, #000);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.72rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.bot-toggle input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.bot-toggle:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-strong));
+}
+
 .room-field .room-input {
   width: 100%;
   padding-top: 11px;
 }
 
 .room-select {
-  width: 104px;
+  width: 92px;
   appearance: none;
 }
 
@@ -259,11 +360,11 @@ h1 {
 }
 
 .replay-button {
-  padding: 0 15px;
+  padding: 0 10px;
   border-color: var(--border);
   background: color-mix(in srgb, var(--panel-bg) 88%, #000);
   box-shadow: 0 12px 28px var(--shadow);
-  font-size: 0.82rem;
+  font-size: 0.74rem;
   line-height: 1;
 }
 
@@ -312,6 +413,11 @@ h1 {
   display: none;
 }
 
+.demo-shell.is-browsing-rooms .start-gate,
+.demo-shell.is-roomed.is-browsing-rooms .start-gate {
+  display: grid;
+}
+
 .room-sheet {
   z-index: 3;
 }
@@ -330,7 +436,7 @@ h1 {
 }
 
 .room-sheet-panel {
-  width: min(360px, calc(100% - 28px));
+  width: min(540px, calc(100% - 28px));
   justify-items: stretch;
 }
 
@@ -345,25 +451,27 @@ h1 {
 .room-sheet-panel p {
   margin: 8px 0 0;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   line-height: 1.3;
 }
 
 .briefing-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 9px;
 }
 
 .briefing-card {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  column-gap: 8px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  column-gap: 9px;
   align-items: center;
-  min-height: 48px;
-  padding: 7px;
+  min-height: 62px;
+  padding: 8px;
   border: 1px solid color-mix(in srgb, var(--border) 74%, #000);
-  background: rgba(0, 0, 0, 0.3);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--panel-strong) 64%, #000), rgba(0, 0, 0, 0.28)),
+    rgba(0, 0, 0, 0.3);
 }
 
 .briefing-card strong,
@@ -373,48 +481,56 @@ h1 {
 
 .briefing-card strong {
   color: var(--text);
-  font-size: 0.66rem;
-  line-height: 1;
+  font-size: 0.68rem;
+  line-height: 1.05;
   text-transform: uppercase;
 }
 
 .briefing-card span:last-child {
   color: var(--muted);
-  font-size: 0.52rem;
-  line-height: 1.25;
+  font-size: 0.58rem;
+  line-height: 1.28;
 }
 
 .briefing-icon {
   grid-row: 1 / span 2;
-  width: 26px;
-  height: 26px;
-  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.35);
+  width: 30px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, #000);
+  box-shadow:
+    inset 0 0 0 2px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
   image-rendering: pixelated;
 }
 
 .briefing-icon-link {
   background:
-    linear-gradient(90deg, transparent 0 7px, var(--accent) 7px 19px, transparent 19px),
-    linear-gradient(transparent 0 7px, var(--accent) 7px 19px, transparent 19px),
+    linear-gradient(90deg, transparent 0 5px, var(--accent) 5px 11px, transparent 11px 19px, var(--accent-2) 19px 25px, transparent 25px),
+    linear-gradient(transparent 0 7px, var(--text) 7px 12px, transparent 12px 18px, var(--text) 18px 23px, transparent 23px),
     var(--panel-strong);
 }
 
 .briefing-icon-move {
   background:
-    linear-gradient(135deg, transparent 0 42%, var(--text) 42% 56%, transparent 56%),
-    linear-gradient(90deg, transparent 0 10px, var(--accent-2) 10px 16px, transparent 16px),
+    linear-gradient(135deg, transparent 0 38%, var(--text) 38% 51%, transparent 51%),
+    linear-gradient(45deg, transparent 0 43%, var(--accent) 43% 57%, transparent 57%),
+    linear-gradient(90deg, transparent 0 10px, var(--accent-2) 10px 18px, transparent 18px),
     var(--panel-strong);
 }
 
 .briefing-icon-green {
   background:
-    radial-gradient(circle, #d9ffd2 0 18%, #57d56c 18% 42%, transparent 43%),
+    linear-gradient(90deg, transparent 0 13px, #d9ffd2 13px 17px, transparent 17px),
+    linear-gradient(transparent 0 13px, #d9ffd2 13px 17px, transparent 17px),
+    radial-gradient(circle, #d9ffd2 0 17%, #57d56c 17% 42%, transparent 43%),
     #153119;
 }
 
 .briefing-icon-red {
   background:
-    radial-gradient(circle, #ffe4d9 0 18%, #ff4f36 18% 42%, transparent 43%),
+    linear-gradient(45deg, transparent 0 43%, #ffe4d9 43% 57%, transparent 57%),
+    linear-gradient(135deg, transparent 0 43%, #ffe4d9 43% 57%, transparent 57%),
+    radial-gradient(circle, #ffe4d9 0 17%, #ff4f36 17% 42%, transparent 43%),
     #3a1512;
 }
 
@@ -427,8 +543,25 @@ h1 {
 
 .briefing-icon-ready {
   background:
-    linear-gradient(90deg, transparent 0 8px, var(--accent) 8px 18px, transparent 18px),
-    linear-gradient(transparent 0 15px, var(--text) 15px 20px, transparent 20px),
+    linear-gradient(45deg, transparent 0 38%, var(--text) 38% 49%, transparent 49%),
+    linear-gradient(135deg, transparent 0 42%, var(--accent) 42% 54%, transparent 54%),
+    linear-gradient(transparent 0 18px, var(--text) 18px 23px, transparent 23px),
+    var(--panel-strong);
+}
+
+.briefing-icon-bot {
+  background:
+    linear-gradient(90deg, transparent 0 8px, #ff6b28 8px 22px, transparent 22px),
+    linear-gradient(transparent 0 8px, #ff6b28 8px 22px, transparent 22px),
+    radial-gradient(circle at 11px 13px, var(--accent-2) 0 2px, transparent 3px),
+    radial-gradient(circle at 19px 13px, var(--accent-2) 0 2px, transparent 3px),
+    var(--panel-strong);
+}
+
+.briefing-icon-session {
+  background:
+    linear-gradient(90deg, transparent 0 7px, var(--accent) 7px 13px, transparent 13px 17px, var(--accent) 17px 23px, transparent 23px),
+    linear-gradient(transparent 0 7px, var(--text) 7px 13px, transparent 13px 17px, var(--text) 17px 23px, transparent 23px),
     var(--panel-strong);
 }
 
@@ -537,34 +670,34 @@ h1 {
   }
 
   .controls {
-    justify-content: stretch;
+    justify-content: flex-start;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: visible;
   }
 
   .style-switcher,
   .session-controls,
   .room-controls,
   .replay-button {
-    width: 100%;
+    width: auto;
   }
 
   .style-switcher {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
   }
 
   .room-controls {
-    display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto;
+    display: flex;
   }
 
   .room-field {
-    width: auto;
-    min-width: 0;
+    width: 156px;
   }
 
-  .room-controls .session-status {
-    grid-column: 1 / -1;
-    max-width: none;
+  .action-menu-panel {
+    right: auto;
+    left: 0;
   }
 
   .session-controls {
@@ -621,7 +754,7 @@ h1 {
   }
 
   .style-switcher {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
   }
 
   .stage-wrap {

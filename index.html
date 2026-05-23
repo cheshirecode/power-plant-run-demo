@@ -25,13 +25,17 @@
           </div>
 
           <div class="room-controls" aria-label="Room controls">
-            <button class="control-button" type="button" id="create-room-button">Create room</button>
+            <button class="control-button" type="button" id="create-room-button">New</button>
             <select class="room-select" id="room-size-input" aria-label="Active player slots" title="Active player slots">
               <option value="1">1 player</option>
               <option value="2" selected>2 players</option>
               <option value="3">3 players</option>
               <option value="4">4 players</option>
             </select>
+            <label class="bot-toggle" title="Add one AI runner">
+              <input id="bot-toggle" type="checkbox" />
+              <span>Bot</span>
+            </label>
             <label class="room-field">
               <span>Room name/code</span>
               <input
@@ -42,30 +46,35 @@
                 autocomplete="off"
                 placeholder="blank = auto"
                 aria-label="Room name or code"
-                title="Create: optional room name. Join: existing room code."
+                title="Create: optional room name. Enter an existing room code and press Enter."
               />
             </label>
-            <button class="control-button" type="button" id="join-room-button">Join room</button>
-            <button class="control-button" type="button" id="ready-button" aria-pressed="false">Ready</button>
-            <button class="control-button" type="button" id="room-replay-button" aria-pressed="false">Replay</button>
-            <button class="control-button" type="button" id="end-room-button">End game</button>
-            <button class="control-button" type="button" id="leave-room-button">Leave</button>
-            <button class="control-button" type="button" id="copy-room-button">Copy</button>
+            <button class="control-button" type="button" id="join-room-button">Rooms</button>
+            <details class="action-menu" id="session-actions">
+              <summary>Session</summary>
+              <div class="action-menu-panel" aria-label="Session actions">
+                <button class="control-button" type="button" id="ready-button" aria-pressed="false">Ready</button>
+                <button class="control-button" type="button" id="room-replay-button" aria-pressed="false">New game</button>
+                <button class="control-button" type="button" id="end-room-button">End session</button>
+                <button class="control-button" type="button" id="leave-room-button">Leave</button>
+                <button class="control-button" type="button" id="copy-room-button">Copy</button>
+              </div>
+            </details>
             <span class="session-status" id="room-status">Solo</span>
           </div>
 
           <div class="style-switcher" aria-label="Graphics style">
             <button class="style-button is-active" type="button" data-style="steampunk" aria-pressed="true">
               <span class="swatch swatch-steampunk" aria-hidden="true"></span>
-              Steampunk
+              Steam
             </button>
             <button class="style-button" type="button" data-style="cyberpunk" aria-pressed="false">
               <span class="swatch swatch-cyberpunk" aria-hidden="true"></span>
-              Cyberpunk
+              Cyber
             </button>
             <button class="style-button" type="button" data-style="futuristic" aria-pressed="false">
               <span class="swatch swatch-futuristic" aria-hidden="true"></span>
-              Futuristic
+              Future
             </button>
           </div>
 
@@ -79,7 +88,7 @@
       </header>
 
       <section class="stage-wrap" aria-label="Soldier entering the power plant demo">
-        <canvas id="game-canvas" width="384" height="216"></canvas>
+        <canvas id="game-canvas" width="768" height="432"></canvas>
         <div class="start-gate" id="start-gate">
           <div class="start-panel">
             <h2>Power Plant Run</h2>
@@ -96,33 +105,43 @@
             <div class="briefing-grid" aria-label="Gameplay briefing">
               <div class="briefing-card">
                 <span class="briefing-icon briefing-icon-link" aria-hidden="true"></span>
-                <strong>Gather</strong>
-                <span>Share the room and wait for active slots.</span>
+                <strong>Fill slots</strong>
+                <span>Invite players, or add one bot before creating the room.</span>
               </div>
               <div class="briefing-card">
                 <span class="briefing-icon briefing-icon-move" aria-hidden="true"></span>
-                <strong>Move</strong>
-                <span>Mouse points your runner toward nodes.</span>
+                <strong>Move fast</strong>
+                <span>Click or drag to steer your runner toward repair nodes.</span>
               </div>
               <div class="briefing-card">
                 <span class="briefing-icon briefing-icon-green" aria-hidden="true"></span>
-                <strong>Green</strong>
-                <span>Hold to score and add countdown time.</span>
+                <strong>Green node</strong>
+                <span>Stand inside the ring until claimed: gain score, add time.</span>
               </div>
               <div class="briefing-card">
                 <span class="briefing-icon briefing-icon-red" aria-hidden="true"></span>
-                <strong>Red</strong>
-                <span>Hold to score negative and cut time.</span>
+                <strong>Red node</strong>
+                <span>Claim to cut time and score below zero. Mean, legal.</span>
               </div>
               <div class="briefing-card">
                 <span class="briefing-icon briefing-icon-blast" aria-hidden="true"></span>
-                <strong>Blast</strong>
-                <span>Outside the ring keeps your points.</span>
+                <strong>Blast ring</strong>
+                <span>When the timer hits zero, anyone inside loses stored points.</span>
+              </div>
+              <div class="briefing-card">
+                <span class="briefing-icon briefing-icon-bot" aria-hidden="true"></span>
+                <strong>Bot brain</strong>
+                <span>The bot chases useful nodes and runs when the alarm gets ugly.</span>
               </div>
               <div class="briefing-card">
                 <span class="briefing-icon briefing-icon-ready" aria-hidden="true"></span>
                 <strong>Ready</strong>
-                <span>All active players ready starts the run.</span>
+                <span>Every human active player must ready up before the round starts.</span>
+              </div>
+              <div class="briefing-card">
+                <span class="briefing-icon briefing-icon-session" aria-hidden="true"></span>
+                <strong>New game</strong>
+                <span>After scores, vote together to run another round in this room.</span>
               </div>
             </div>
             <button class="start-button" type="button" id="room-ready-button">Ready</button>

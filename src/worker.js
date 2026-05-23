@@ -17,45 +17,62 @@ const NODE_BONUS_COUNT_MIN = 3;
 const NODE_BONUS_COUNT_MAX = 4;
 const NODE_NEGATIVE_CHANCE = 0.32;
 const NODE_HOLD_SECONDS_PER_POINT = 1 / 3;
-const NODE_REPAIR_RADIUS_MIN = 12;
-const NODE_REPAIR_RADIUS_MAX = 18;
-const NODE_MIN_DISTANCE = 24;
-const NODE_MAX_VALUE_DISTANCE = 40;
-const NODE_MIN_VALUE_DISTANCE = 190;
+const NODE_REPAIR_RADIUS_MIN = 6;
+const NODE_REPAIR_RADIUS_MAX = 9;
+const NODE_MIN_DISTANCE = 36;
+const NODE_MAX_VALUE_DISTANCE = 60;
+const NODE_MIN_VALUE_DISTANCE = 360;
 const NODE_VALUE_DECIMALS = 2;
-const BLAST_CENTER = { x: 244, y: 108 };
-const BLAST_RADIUS_BASE = 92;
-const BLAST_RADIUS_JITTER = 10;
+const WORLD_WIDTH = 768;
+const WORLD_HEIGHT = 432;
+const BLAST_CENTER = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 };
+const BLAST_RADIUS_BASE = 46;
+const BLAST_RADIUS_JITTER = 5;
 const MAX_PLAYERS = 4;
+const BOT_ID = "bot-1";
+const BOT_TICK_MS = 350;
+const BOT_SPEED = 36;
+const BOT_ESCAPE_THRESHOLD_MS = 2_500;
+const BOT_POSITIVE_THRESHOLD_MS = 5_000;
 const START_NODES = [
-  { id: "n1", x: 48, y: 176 },
-  { id: "n2", x: 56, y: 96 },
-  { id: "n3", x: 86, y: 42 },
-  { id: "n4", x: 100, y: 148 },
-  { id: "n5", x: 130, y: 78 },
-  { id: "n6", x: 150, y: 184 },
-  { id: "n7", x: 160, y: 130 },
-  { id: "n8", x: 178, y: 54 },
-  { id: "n9", x: 196, y: 118 },
-  { id: "n10", x: 218, y: 176 },
-  { id: "n11", x: 238, y: 46 },
-  { id: "n12", x: 264, y: 92 },
-  { id: "n13", x: 286, y: 154 },
-  { id: "n14", x: 320, y: 58 },
-  { id: "n15", x: 336, y: 120 },
-  { id: "n16", x: 342, y: 184 },
+  { id: "n1", x: 70, y: 348 },
+  { id: "n2", x: 96, y: 172 },
+  { id: "n3", x: 132, y: 74 },
+  { id: "n4", x: 164, y: 286 },
+  { id: "n5", x: 214, y: 130 },
+  { id: "n6", x: 236, y: 382 },
+  { id: "n7", x: 284, y: 252 },
+  { id: "n8", x: 292, y: 64 },
+  { id: "n9", x: 342, y: 180 },
+  { id: "n10", x: 344, y: 330 },
+  { id: "n11", x: 384, y: 112 },
+  { id: "n12", x: 428, y: 174 },
+  { id: "n13", x: 430, y: 306 },
+  { id: "n14", x: 488, y: 72 },
+  { id: "n15", x: 508, y: 244 },
+  { id: "n16", x: 534, y: 370 },
+  { id: "n17", x: 592, y: 130 },
+  { id: "n18", x: 610, y: 292 },
+  { id: "n19", x: 676, y: 80 },
+  { id: "n20", x: 704, y: 214 },
+  { id: "n21", x: 704, y: 360 },
+  { id: "n22", x: 360, y: 252 },
+  { id: "n23", x: 468, y: 216 },
+  { id: "n24", x: 304, y: 214 },
 ];
 const PLAYER_SPAWNS = [
-  { x: 34, y: 184 },
-  { x: 40, y: 36 },
-  { x: 82, y: 198 },
-  { x: 94, y: 24 },
-  { x: 138, y: 204 },
-  { x: 22, y: 118 },
-  { x: 364, y: 24 },
-  { x: 366, y: 198 },
-  { x: 304, y: 206 },
-  { x: 368, y: 70 },
+  { x: 44, y: 372 },
+  { x: 56, y: 58 },
+  { x: 126, y: 402 },
+  { x: 148, y: 42 },
+  { x: 256, y: 408 },
+  { x: 36, y: 232 },
+  { x: 728, y: 48 },
+  { x: 728, y: 390 },
+  { x: 620, y: 410 },
+  { x: 728, y: 144 },
+  { x: 604, y: 36 },
+  { x: 390, y: 402 },
 ];
 
 export class GameRoom {
@@ -80,6 +97,7 @@ export class GameRoom {
       ownerId: null,
       replayVotes: {},
       closed: false,
+      botEnabled: false,
     };
   }
 
@@ -101,6 +119,17 @@ export class GameRoom {
       return json({ error: "Sign in required" }, 401);
     }
 
+    if (request.method === "DELETE") {
+      if (this.roomState.closed) {
+        return json({ ok: true, room: this.roomSummary() });
+      }
+      if (this.roomState.ownerId && this.roomState.ownerId !== player.id) {
+        return json({ error: "Only the session owner can end this room" }, 403);
+      }
+      await this.closeRoom();
+      return json({ ok: true, room: this.roomSummary() });
+    }
+
     if (request.headers.get("Upgrade") !== "websocket") {
       return json({
         ok: true,
@@ -110,11 +139,16 @@ export class GameRoom {
 
     const targetPlayerCount = clampNumber(url.searchParams.get("players"), 1, MAX_PLAYERS);
     const spectate = url.searchParams.get("spectate") === "1";
+    const botEnabled = url.searchParams.get("bot") === "1";
     if (this.roomState.closed) {
       return json({ error: "Room closed" }, 410);
     }
     if (this.roomState.phase === "lobby" && Object.keys(this.roomState.players).length === 0) {
       this.roomState.targetPlayerCount = targetPlayerCount;
+      this.roomState.botEnabled = botEnabled;
+      if (botEnabled) {
+        this.ensureBotPlayer();
+      }
     }
 
     const pair = new WebSocketPair();
@@ -150,7 +184,7 @@ export class GameRoom {
     const playerId = player.id;
     this.sessions.set(socket, playerId);
     const existingPlayer = this.roomState.players[playerId];
-    const activePlayers = Object.values(this.roomState.players).filter((player) => !player.spectator);
+    const activePlayers = Object.values(this.roomState.players).filter((player) => !player.spectator && !player.bot);
     const isSpectator = existingPlayer
       ? existingPlayer.spectator
       : spectate || this.roomState.phase !== "lobby" || activePlayers.length >= this.roomState.targetPlayerCount;
@@ -255,7 +289,7 @@ export class GameRoom {
       return;
     }
 
-    if (message.type === "end-game") {
+    if (message.type === "end-game" || message.type === "end-session") {
       if (this.roomState.ownerId !== playerId) return;
       await this.closeRoom();
       return;
@@ -273,7 +307,7 @@ export class GameRoom {
   }
 
   async maybeStartRun() {
-    const players = Object.values(this.roomState.players).filter((player) => !player.spectator);
+    const players = this.activeHumanPlayers();
     if (this.roomState.phase !== "lobby" || players.length === 0) return;
     if (players.length < this.roomState.targetPlayerCount) return;
     if (!players.every((player) => player.ready)) return;
@@ -281,7 +315,7 @@ export class GameRoom {
   }
 
   async maybeReplayRun() {
-    const players = Object.values(this.roomState.players).filter((player) => !player.spectator && player.connected !== false);
+    const players = this.activeHumanPlayers().filter((player) => player.connected !== false);
     if (players.length === 0) return;
     if (!players.every((player) => this.roomState.replayVotes[player.id])) return;
     await this.startRun(false);
@@ -308,9 +342,11 @@ export class GameRoom {
       player.y = spawn.y;
       player.roundScore = 0;
       player.caughtInBlast = false;
-      player.ready = false;
+      player.ready = Boolean(player.bot);
+      delete player.botTargetNodeId;
     }
     await this.setPhase("repair", ROUND_COUNTDOWN_MS);
+    await this.scheduleNextRepairAlarm();
     await this.persistRoomState();
   }
 
@@ -318,8 +354,8 @@ export class GameRoom {
     const player = this.roomState.players[playerId];
     if (!player) return;
 
-    player.x = clampNumber(message.x, 0, 384);
-    player.y = clampNumber(message.y, 0, 216);
+    player.x = clampNumber(message.x, 0, WORLD_WIDTH);
+    player.y = clampNumber(message.y, 0, WORLD_HEIGHT);
     await this.updateNodeClaims(playerId);
   }
 
@@ -386,6 +422,7 @@ export class GameRoom {
     if (!phaseStartedAt || this.roomState.phase === "lobby") return;
 
     const elapsed = Date.now() - phaseStartedAt;
+    await this.updateBotPlayer();
     await this.updateNodeClaims();
     if (this.roomState.phase === "repair" && Date.now() >= this.roomState.countdownEndsAt) {
       this.applyBlast();
@@ -416,7 +453,66 @@ export class GameRoom {
       .filter((node) => node.claimedBy && !node.repaired)
       .map((node) => node.claimEndsAt)
       .filter(Boolean);
-    await this.state.storage.setAlarm(Math.min(this.roomState.countdownEndsAt, ...claimEndsAt) + 50);
+    const bot = this.roomState.players[BOT_ID];
+    const botTick = bot && !bot.spectator ? Date.now() + BOT_TICK_MS : null;
+    const nextTimes = [this.roomState.countdownEndsAt, ...claimEndsAt, botTick].filter(Boolean);
+    await this.state.storage.setAlarm(Math.min(...nextTimes) + 50);
+  }
+
+  async updateBotPlayer() {
+    if (this.roomState.phase !== "repair") return;
+    if (Date.now() >= this.roomState.countdownEndsAt) return;
+    const bot = this.roomState.players[BOT_ID];
+    if (!bot || bot.spectator) return;
+
+    const target = this.getBotTarget(bot);
+    if (!target) return;
+
+    const dx = target.x - bot.x;
+    const dy = target.y - bot.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance > 0.5) {
+      const step = Math.min(distance, BOT_SPEED);
+      bot.x = Math.round(bot.x + (dx / distance) * step);
+      bot.y = Math.round(bot.y + (dy / distance) * step);
+    }
+
+    await this.updateNodeClaims(BOT_ID);
+    await this.persistRoomState();
+  }
+
+  getBotTarget(bot) {
+    const now = Date.now();
+    const remainingMs = Math.max(0, (this.roomState.countdownEndsAt || now) - now);
+    const activeClaim = this.roomState.nodes.find((node) => node.claimedBy === bot.id && !node.repaired);
+    if (activeClaim && remainingMs > BOT_ESCAPE_THRESHOLD_MS) {
+      bot.botTargetNodeId = activeClaim.id;
+      return activeClaim;
+    }
+
+    if (remainingMs <= BOT_ESCAPE_THRESHOLD_MS) {
+      delete bot.botTargetNodeId;
+      return safePlayerSpawns(this.roomState.blast || makeBlast(), 1)[0] || { x: 34, y: 184 };
+    }
+
+    const candidates = this.roomState.nodes.filter((node) => !node.repaired && !node.claimedBy);
+    if (candidates.length === 0) return safePlayerSpawns(this.roomState.blast || makeBlast(), 1)[0] || null;
+
+    const wantsSafety = remainingMs <= BOT_POSITIVE_THRESHOLD_MS;
+    const target = candidates
+      .map((node) => {
+        const distance = distanceToNode(bot, node);
+        const magnitude = Math.abs(node.value);
+        const signBias = wantsSafety ? (node.value > 0 ? 42 : -58) : node.value < 0 ? 10 : 0;
+        const valueScore = wantsSafety ? Math.max(0, node.value) * 18 : magnitude * 12;
+        return { node, score: valueScore + signBias - distance / 4 };
+      })
+      .sort((a, b) => b.score - a.score)[0]?.node;
+
+    if (target) {
+      bot.botTargetNodeId = target.id;
+    }
+    return target || null;
   }
 
   applyBlast() {
@@ -453,13 +549,15 @@ export class GameRoom {
 
   roomSummary() {
     const players = Object.values(this.roomState.players);
-    const activePlayers = players.filter((player) => !player.spectator);
+    const activePlayers = players.filter((player) => !player.spectator && !player.bot);
+    const botPlayers = players.filter((player) => !player.spectator && player.bot);
     const spectatorPlayers = players.filter((player) => player.spectator);
     return {
       id: this.roomState.id,
       phase: this.roomState.phase,
       targetPlayerCount: this.roomState.targetPlayerCount,
       activeCount: activePlayers.length,
+      botCount: botPlayers.length,
       spectatorCount: spectatorPlayers.length,
       activePlayerIds: activePlayers.map((player) => player.id),
       spectatorPlayerIds: spectatorPlayers.map((player) => player.id),
@@ -467,12 +565,39 @@ export class GameRoom {
       ownerId: this.roomState.ownerId,
       closed: Boolean(this.roomState.closed),
       cycle: this.roomState.cycle,
+      botEnabled: Boolean(this.roomState.botEnabled),
     };
+  }
+
+  activeHumanPlayers() {
+    return Object.values(this.roomState.players).filter((player) => !player.spectator && !player.bot);
+  }
+
+  ensureBotPlayer() {
+    this.roomState.botEnabled = true;
+    this.roomState.players[BOT_ID] ||= {
+      id: BOT_ID,
+      login: "BOT",
+      avatarUrl: "",
+      joinedAt: Date.now(),
+      role: "engineer",
+      gender: "male",
+      x: 34,
+      y: 184,
+      score: 0,
+      roundScore: 0,
+      ready: true,
+      spectator: false,
+      bot: true,
+      connected: true,
+    };
+    this.roomState.players[BOT_ID].ready = true;
+    this.roomState.players[BOT_ID].connected = true;
   }
 
   nextRole() {
     const roles = ["rifleman", "scout", "heavy", "engineer"];
-    const usedRoles = new Set(Object.values(this.roomState.players).filter((player) => !player.spectator).map((player) => player.role));
+    const usedRoles = new Set(Object.values(this.roomState.players).filter((player) => !player.spectator && !player.bot).map((player) => player.role));
     return roles.find((role) => !usedRoles.has(role)) || roles[0];
   }
 
@@ -760,10 +885,16 @@ export default {
         return json({ error: "Invalid room id" }, 400);
       }
 
-      await registerRoom(env, roomId);
+      if (request.method !== "DELETE") {
+        await registerRoom(env, roomId);
+      }
       const objectId = env.ROOMS.idFromName(roomId);
       const room = env.ROOMS.get(objectId);
-      return room.fetch(request);
+      const response = await room.fetch(request);
+      if (request.method === "DELETE" && response.ok) {
+        await forgetRoom(env, roomId);
+      }
+      return response;
     }
 
     return env.ASSETS.fetch(request);

@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "cf:whoami": "wrangler whoami"
+    "cf:whoami": "wrangler whoami",
+    "smoke:bots": "node scripts/smoke-bot-rooms.mjs"
   },
   "devDependencies": {
-    "wrangler": "^4.94.0"
+    "wrangler": "^4.94.0",
+    "ws": "^8.21.0"
   }
 }

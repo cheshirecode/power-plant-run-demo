@@ -20,6 +20,8 @@ const leaveRoomButton = document.querySelector("#leave-room-button");
 const copyRoomButton = document.querySelector("#copy-room-button");
 const roomSizeInput = document.querySelector("#room-size-input");
 const roomCodeInput = document.querySelector("#room-code-input");
+const botToggle = document.querySelector("#bot-toggle");
+const sessionActions = document.querySelector("#session-actions");
 const roomStatus = document.querySelector("#room-status");
 const roomSheet = document.querySelector("#room-sheet");
 const roomSheetStatus = document.querySelector("#room-sheet-status");
@@ -31,6 +33,9 @@ const VIEW = {
   width: canvas.width,
   height: canvas.height,
 };
+const LEGACY_PLANT_CENTER = { x: 244, y: 108 };
+const WORLD_CENTER = { x: VIEW.width / 2, y: VIEW.height / 2 };
+const PLANT_WORLD_SCALE = 0.5;
 
 const styles = {
   steampunk: {
@@ -362,6 +367,17 @@ function replay() {
 }
 
 function startGame() {
+  if (shell.classList.contains("is-browsing-rooms")) {
+    shell.classList.remove("is-browsing-rooms");
+    if (gameStarted || sessionState.roomId) {
+      shell.classList.remove("is-gated");
+    } else {
+      shell.classList.add("is-gated");
+    }
+    updateSessionUi();
+    updateRoomStatus();
+    return;
+  }
   if (sessionState.roomId && sessionState.room?.phase === "lobby") return;
   gameStarted = true;
   shell.classList.remove("is-gated");
@@ -623,28 +639,32 @@ function updateSessionUi() {
   loginButton.classList.toggle("is-hidden", Boolean(user));
   logoutButton.classList.toggle("is-hidden", !user);
   createRoomButton.disabled = !user;
-  createRoomButton.textContent = sessionState.roomId ? "New room" : "Create room";
+  createRoomButton.textContent = "New";
   joinRoomButton.disabled = !user;
+  joinRoomButton.textContent = "Rooms";
   readyButton.disabled =
     !user || isSpectator || sessionState.room?.phase !== "lobby" || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
   copyRoomButton.disabled = !sessionState.roomId;
   leaveRoomButton.disabled = !sessionState.roomId;
   roomSizeInput.disabled = !user;
   roomCodeInput.disabled = !user;
+  botToggle.disabled = !user || Boolean(sessionState.roomId);
   readyButton.classList.toggle("is-active", sessionState.ready);
   readyButton.setAttribute("aria-pressed", String(sessionState.ready));
   readyButton.textContent = isSpectator ? "Watch" : "Ready";
   roomReplayButton.disabled = !user || !local || isSpectator || !isEndPhase || replayVoted;
   roomReplayButton.classList.toggle("is-active", replayVoted);
   roomReplayButton.setAttribute("aria-pressed", String(replayVoted));
-  roomReplayButton.textContent = replayVoted ? "Replay voted" : "Replay";
+  roomReplayButton.textContent = replayVoted ? "New game voted" : "New game";
   endRoomButton.disabled = !user || !sessionState.roomId || !isOwner;
   replayButton.disabled = Boolean(sessionState.room) && (!local || isSpectator || !isEndPhase || replayVoted);
   replayButton.classList.toggle("is-active", Boolean(sessionState.room) && replayVoted);
   replayButton.setAttribute("aria-pressed", String(Boolean(sessionState.room) && replayVoted));
-  replayButton.textContent = sessionState.room ? (replayVoted ? "Voted" : "Replay") : "Replay";
+  replayButton.textContent = sessionState.room ? (replayVoted ? "Voted" : "New game") : "Replay";
+  startButton.textContent = shell.classList.contains("is-browsing-rooms") ? "Back" : "Start";
   roomReadyButton.disabled = readyButton.disabled;
   roomReadyButton.textContent = isSpectator ? "Spectating" : "Ready";
+  sessionActions.classList.toggle("is-active", Boolean(sessionState.roomId));
   shell.classList.toggle("is-roomed", Boolean(sessionState.roomId));
   updateRoomSheet();
   renderRoomList();
@@ -662,13 +682,15 @@ function updateRoomStatus(nextStatus = null) {
   }
 
   const players = Object.values(sessionState.room?.players || {});
-  const activeCount = players.filter((player) => !player.spectator).length;
+  const activeCount = players.filter((player) => !player.spectator && !player.bot).length;
+  const botCount = players.filter((player) => !player.spectator && player.bot).length;
   const spectatorCount = players.filter((player) => player.spectator).length;
   const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
   const phase = sessionState.room?.phase || "room";
   const suffix = phase === "repair" ? ` · ${getCountdownLabel()}s` : "";
+  const bots = botCount > 0 ? ` + ${botCount} bot` : "";
   const spectators = spectatorCount > 0 ? ` · ${spectatorCount} watching` : "";
-  roomStatus.textContent = `${sessionState.roomId} · ${activeCount}/${targetCount}${spectators} · ${phase}${suffix}`;
+  roomStatus.textContent = `${sessionState.roomId} · ${activeCount}/${targetCount}${bots}${spectators} · ${phase}${suffix}`;
 }
 
 function updateRoomSheet() {
@@ -685,9 +707,11 @@ function updateRoomSheet() {
   roomSheet.classList.toggle("is-hidden", !shouldShow);
   if (!shouldShow) return;
 
-  const playerCount = Object.values(sessionState.room?.players || {}).filter((player) => !player.spectator).length;
+  const players = Object.values(sessionState.room?.players || {});
+  const playerCount = players.filter((player) => !player.spectator && !player.bot).length;
+  const botCount = players.filter((player) => !player.spectator && player.bot).length;
   const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
-  roomSheetStatus.textContent = `${sessionState.roomId} · ${playerCount}/${targetCount} joined`;
+  roomSheetStatus.textContent = `${sessionState.roomId} · ${playerCount}/${targetCount} joined${botCount ? ` + ${botCount} bot` : ""}`;
 }
 
 async function createRoom() {
@@ -707,7 +731,7 @@ async function createRoom() {
 
   const namedRoomId = normalizeRoomId(roomCodeInput.value);
   if (namedRoomId && namedRoomId !== previousRoomId) {
-    connectRoom(namedRoomId);
+    connectRoom(namedRoomId, { bot: botToggle.checked });
     return;
   }
   if (namedRoomId === previousRoomId) {
@@ -718,7 +742,7 @@ async function createRoom() {
     const response = await fetch("/api/rooms", {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ playerCount: getSelectedRoomSize() }),
+      body: JSON.stringify({ playerCount: getSelectedRoomSize(), bot: botToggle.checked }),
     });
     if (response.status === 401) {
       sessionState.user = null;
@@ -729,7 +753,7 @@ async function createRoom() {
     if (!response.ok) throw new Error("room create failed");
     const room = await response.json();
     roomCodeInput.value = room.roomId;
-    connectRoom(room.roomId);
+    connectRoom(room.roomId, { bot: botToggle.checked });
   } catch {
     updateRoomStatus("Create failed");
   }
@@ -746,6 +770,7 @@ function leaveRoom(status = null) {
   roomCodeInput.value = "";
   clearRoomUrl();
   shell.classList.add("is-gated");
+  shell.classList.remove("is-browsing-rooms");
   updateRoomStatus(status);
   updateSessionUi();
   updateRoomSheet();
@@ -761,6 +786,13 @@ function joinRoom() {
   }
 
   connectRoom(roomId);
+}
+
+function showActiveRooms() {
+  shell.classList.add("is-gated", "is-browsing-rooms");
+  updateRoomStatus("Rooms");
+  updateSessionUi();
+  loadRoomList();
 }
 
 function connectRoom(roomId, options = {}) {
@@ -779,6 +811,9 @@ function connectRoom(roomId, options = {}) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const targetPlayerCount = getSelectedRoomSize();
   const params = new URLSearchParams({ players: String(targetPlayerCount) });
+  if (options.bot) {
+    params.set("bot", "1");
+  }
   if (options.spectate) {
     params.set("spectate", "1");
   }
@@ -787,6 +822,7 @@ function connectRoom(roomId, options = {}) {
 
   socket.addEventListener("open", () => {
     if (sessionState.socket !== socket) return;
+    shell.classList.remove("is-browsing-rooms");
     updateRoomStatus();
     updateSessionUi();
     updateRoomSheet();
@@ -898,7 +934,8 @@ function renderRoomList() {
     row.className = "room-list-row";
 
     const label = document.createElement("span");
-    label.textContent = `${room.id} · ${room.activeCount}/${room.targetPlayerCount} players · ${room.phase}`;
+    const botSuffix = room.botCount ? ` + ${room.botCount} bot` : "";
+    label.textContent = `${room.id} · ${room.activeCount}/${room.targetPlayerCount}${botSuffix} players · ${room.phase}`;
     row.append(label);
 
     const joinButton = document.createElement("button");
@@ -917,7 +954,36 @@ function renderRoomList() {
     spectateButton.addEventListener("click", () => connectRoom(room.id, { spectate: true }));
     row.append(spectateButton);
 
+    if (room.ownerId === sessionState.user?.login && room.phase !== "closed") {
+      const endButton = document.createElement("button");
+      endButton.type = "button";
+      endButton.className = "room-list-button";
+      endButton.textContent = "End session";
+      endButton.addEventListener("click", () => endRoomSession(room.id));
+      row.append(endButton);
+    }
+
     roomList.append(row);
+  }
+}
+
+async function endRoomSession(roomId = sessionState.roomId) {
+  if (!roomId || !sessionState.user) return;
+
+  try {
+    const response = await fetch(`/api/rooms/${roomId}`, {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error("session close failed");
+    if (roomId === sessionState.roomId) {
+      leaveRoom("Session ended");
+    } else {
+      await loadRoomList();
+      updateRoomStatus("Session ended");
+    }
+  } catch {
+    updateRoomStatus("End failed");
   }
 }
 
@@ -978,7 +1044,7 @@ function updateRoomPosition(loop, time) {
   const dy = sessionState.target.y - sessionState.localPosition.y;
   const distance = Math.hypot(dx, dy);
   if (distance > 0.5) {
-    const step = Math.min(distance, 2.6);
+    const step = Math.min(distance, 5.2);
     sessionState.localPosition.x += (dx / distance) * step;
     sessionState.localPosition.y += (dy / distance) * step;
   }
@@ -1014,7 +1080,7 @@ function replayOrVote() {
 }
 
 function endRoomGame() {
-  sendRoomMessage({ type: "end-game" });
+  sendRoomMessage({ type: "end-session" });
 }
 
 async function copyRoomLink() {
@@ -1323,7 +1389,7 @@ function drawPixelCircle(cx, cy, radius, fill, edge) {
 }
 
 function drawPlant(style, time, progress, loop) {
-  drawNativePlant(style, time, progress, loop);
+  drawCenteredPlant(() => drawNativePlant(style, time, progress, loop));
 }
 
 function drawSceneEntrance(style, progress, time) {
@@ -1373,6 +1439,15 @@ function drawNativePlant(style, time, progress, loop = getLoopState(0)) {
   }
 
   drawIntactPlantBody(style, palette, progress, time, loop.upgradeLevel, damage);
+}
+
+function drawCenteredPlant(drawCallback) {
+  ctx.save();
+  ctx.translate(WORLD_CENTER.x, WORLD_CENTER.y);
+  ctx.scale(PLANT_WORLD_SCALE, PLANT_WORLD_SCALE);
+  ctx.translate(-LEGACY_PLANT_CENTER.x, -LEGACY_PLANT_CENTER.y);
+  drawCallback();
+  ctx.restore();
 }
 
 function drawIntactPlantBody(style, palette, progress, time, upgradeLevel, damage = 0) {
@@ -1792,18 +1867,20 @@ function drawRoomPlayers(style) {
   const players = Object.values(sessionState.room.players).sort((a, b) => (a.y || 0) - (b.y || 0));
   for (const player of players) {
     const isLocal = player.id === sessionState.user.login;
+    const isBot = Boolean(player.bot);
     const x = Math.round(player.x || 0);
     const y = Math.round(player.y || 0);
     if (x <= 0 || y <= 0) continue;
 
-    px(x - 5, y - 14, 10, 10, style.scene.shadow);
-    px(x - 3, y - 18, 6, 6, player.spectator ? style.scene.rock : isLocal ? style.css.text : style.scene.glow);
-    px(x - 2, y - 17, 4, 4, player.spectator ? style.scene.groundDark : isLocal ? style.scene.glow : style.scene.accent);
-    px(x - 5, y - 7, 10, 3, player.spectator ? style.scene.rock : isLocal ? style.scene.accent : style.scene.soldier.armor);
-    px(x - 8, y - 23, Math.min(34, player.id.length * 4 + 4), 5, "rgba(0, 0, 0, 0.62)");
+    px(x - 3, y - 7, 6, 5, style.scene.shadow);
+    px(x - 2, y - 10, 4, 4, player.spectator ? style.scene.rock : isBot ? "#ff6b28" : isLocal ? style.css.text : style.scene.glow);
+    px(x - 1, y - 9, 2, 2, player.spectator ? style.scene.groundDark : isBot ? style.css.accent2 : isLocal ? style.scene.glow : style.scene.accent);
+    px(x - 3, y - 4, 6, 2, player.spectator ? style.scene.rock : isBot ? "#6a2b16" : isLocal ? style.scene.accent : style.scene.soldier.armor);
+    const label = isBot ? "BOT" : player.id.slice(0, 8);
+    px(x - 7, y - 18, Math.min(34, label.length * 4 + 4), 5, "rgba(0, 0, 0, 0.62)");
     ctx.fillStyle = style.css.text;
     ctx.font = "5px monospace";
-    ctx.fillText(player.id.slice(0, 8), x - 6, y - 19);
+    ctx.fillText(label, x - 6, y - 14);
 
     if (isLocal && !player.spectator) {
       drawPlayerArrow(style, x, y, player.ready);
@@ -1813,12 +1890,12 @@ function drawRoomPlayers(style) {
 
 function drawPlayerArrow(style, x, y, ready) {
   const bob = Math.floor(Math.sin(performance.now() / 140) * 2);
-  const arrowY = y - 34 + bob;
+  const arrowY = y - 24 + bob;
   const color = ready ? style.scene.glow : style.scene.accent;
-  px(x - 2, arrowY, 4, 7, color);
-  px(x - 5, arrowY + 5, 10, 3, color);
-  px(x - 3, arrowY + 8, 6, 3, color);
-  px(x - 1, arrowY + 11, 2, 3, color);
+  px(x - 1, arrowY, 2, 5, color);
+  px(x - 3, arrowY + 4, 6, 2, color);
+  px(x - 2, arrowY + 6, 4, 2, color);
+  px(x, arrowY + 8, 1, 2, color);
 }
 
 function drawRoomObjectives(style, time) {
@@ -1837,25 +1914,25 @@ function drawRoomObjectives(style, time) {
       const magnitude = Math.abs(node.value);
       const isRich = magnitude >= 7 || node.bonus;
       const isClaimed = Boolean(node.claimedBy);
-      const pulse = 1 + Math.floor(Math.sin(time / (isRich ? 96 : 130) + node.x) * 2);
+      const pulse = Math.floor(Math.sin(time / (isRich ? 96 : 130) + node.x) * 1);
       const color = node.repaired ? style.scene.groundLight : isNegative ? "#ff4f36" : "#57d56c";
       const edge = node.repaired ? style.scene.groundDark : isClaimed ? style.css.text : isNegative ? "#5b1711" : "#153119";
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
-      drawPixelCircle(node.x, node.y, node.repaired ? 5 : node.radius || (isRich ? 8 : 7) + pulse, color, edge);
-      drawPixelCircle(node.x, node.y, node.repaired ? 5 : (isRich ? 8 : 7) + pulse, color, edge);
-      px(node.x - 5, node.y - 5, 10, 10, node.repaired ? style.scene.groundDark : isNegative ? "#3a1512" : "#153119");
-      px(node.x - 2, node.y - 2, 4, 4, node.repaired ? style.scene.groundLight : style.css.text);
+      drawPixelCircle(node.x, node.y, node.repaired ? 3 : node.radius || (isRich ? 4 : 3) + pulse, color, edge);
+      drawPixelCircle(node.x, node.y, node.repaired ? 3 : (isRich ? 4 : 3) + pulse, color, edge);
+      px(node.x - 3, node.y - 3, 6, 6, node.repaired ? style.scene.groundDark : isNegative ? "#3a1512" : "#153119");
+      px(node.x - 1, node.y - 1, 2, 2, node.repaired ? style.scene.groundLight : style.css.text);
       if (node.bonus && !node.repaired) {
-        px(node.x - 1, node.y - 9, 2, 3, style.css.text);
-        px(node.x - 1, node.y + 6, 2, 3, style.css.text);
-        px(node.x - 9, node.y - 1, 3, 2, style.css.text);
-        px(node.x + 6, node.y - 1, 3, 2, style.css.text);
+        px(node.x - 1, node.y - 7, 2, 2, style.css.text);
+        px(node.x - 1, node.y + 5, 2, 2, style.css.text);
+        px(node.x - 7, node.y - 1, 2, 2, style.css.text);
+        px(node.x + 5, node.y - 1, 2, 2, style.css.text);
       }
       ctx.fillStyle = style.css.text;
-      ctx.font = "7px monospace";
+      ctx.font = "6px monospace";
       const label = `${node.value > 0 ? "+" : ""}${formatNodeValue(node.value)}`;
-      px(node.x - 15, node.y - 23, 30, 9, "rgba(0, 0, 0, 0.62)");
-      ctx.fillText(label, node.x - 14, node.y - 15);
+      px(node.x - 13, node.y - 18, 26, 8, "rgba(0, 0, 0, 0.62)");
+      ctx.fillText(label, node.x - 12, node.y - 12);
       ctx.globalAlpha = 1;
     }
   }
@@ -1872,13 +1949,13 @@ function drawClaimTimers(style) {
     if (!player) continue;
     const remainingMs = node.claimEndsAt - Date.now();
     const x = Math.round(player.x || node.x);
-    const y = Math.round(player.y || node.y) - 32;
+    const y = Math.round(player.y || node.y) - 20;
     const label = formatHoldLabel(remainingMs);
-    px(x - 12, y - 7, 24, 10, "rgba(0, 0, 0, 0.72)");
-    px(x - 12, y - 7, Math.round(24 * Math.max(0, remainingMs / node.holdMs)), 2, style.scene.accent);
+    px(x - 10, y - 7, 20, 9, "rgba(0, 0, 0, 0.72)");
+    px(x - 10, y - 7, Math.round(20 * Math.max(0, remainingMs / node.holdMs)), 2, style.scene.accent);
     ctx.fillStyle = style.css.text;
-    ctx.font = "7px monospace";
-    ctx.fillText(label, x - 10, y + 1);
+    ctx.font = "6px monospace";
+    ctx.fillText(label, x - 8, y);
   }
 }
 
@@ -1890,8 +1967,8 @@ function drawBuildingCountdown(style, time) {
   const blink = seconds <= 5 ? Math.sin(time / 90) > -0.25 : Math.sin(time / 280) > -0.7;
 
   const label = getCountdownLabel().padStart(5, "0");
-  const x = 213;
-  const y = 58;
+  const x = 365;
+  const y = 192;
   ctx.globalAlpha = blink ? 1 : 0.46;
   px(x - 18, y - 21, 86, 31, "rgba(0, 0, 0, 0.68)");
   px(x - 18, y - 21, 86, 3, style.scene.accent);
@@ -2365,7 +2442,7 @@ function render(now) {
   }
   drawBackground(style, now);
   drawPlant(style, now, plantProgress, loop);
-  drawExplosion(style, loop.elapsed, now);
+  drawCenteredPlant(() => drawExplosion(style, loop.elapsed, now));
   drawRoomObjectives(style, now);
   drawBuildingCountdown(style, now);
   if (sessionState.room) {
@@ -2373,7 +2450,7 @@ function render(now) {
     drawClaimTimers(style);
     drawRoomHud(style);
   } else {
-    drawSquad(style, loop.elapsed, now);
+    drawCenteredPlant(() => drawSquad(style, loop.elapsed, now));
   }
   drawVignette(style);
 
@@ -2395,13 +2472,18 @@ logoutButton.addEventListener("click", () => {
 });
 
 createRoomButton.addEventListener("click", createRoom);
-joinRoomButton.addEventListener("click", joinRoom);
+joinRoomButton.addEventListener("click", showActiveRooms);
 readyButton.addEventListener("click", toggleReady);
 roomReadyButton.addEventListener("click", toggleReady);
 roomReplayButton.addEventListener("click", voteReplayRoom);
 endRoomButton.addEventListener("click", endRoomGame);
 leaveRoomButton.addEventListener("click", leaveRoom);
 copyRoomButton.addEventListener("click", copyRoomLink);
+sessionActions.addEventListener("click", (event) => {
+  if (event.target.closest("button")) {
+    sessionActions.open = false;
+  }
+});
 canvas.addEventListener("click", handleCanvasClick);
 canvas.addEventListener("pointerdown", handleCanvasPointer);
 canvas.addEventListener("pointermove", handleCanvasPointer);

@@ -13,7 +13,8 @@ The deployed Worker serves the static demo and exposes the first multiplayer bac
 - Health check: `/api/health`
 - OAuth config check: `/api/auth/config`
 - Room creation: `POST /api/rooms`
-- Room WebSocket: `/ws/rooms/:roomId?players=:targetCount`
+- Room WebSocket: `/ws/rooms/:roomId?players=:targetCount&bot=1`
+- Room/session close: `DELETE /api/rooms/:roomId`
 
 Room creation and WebSocket joining require the signed GitHub session cookie. The
 server derives the player identity from GitHub OAuth instead of trusting a client
@@ -32,14 +33,24 @@ provided player id.
   player so the room can still be ended.
 - Unexpected socket closes should return the client to the home/room-list screen
   instead of leaving it on a dead board.
+- Rooms can include one server-controlled bot. The bot is not counted against
+  human player slots, is always ready, chases useful nodes, and retreats when
+  the countdown is nearly spent.
+- A room can run multiple games through the New game vote. End session closes
+  the room and removes it from the public room list.
 
 Local commands:
 
 ```sh
 npm install
 npm run dev
+npm run smoke:bots
 npm run deploy
 ```
+
+`npm run smoke:bots` expects a running Worker at `POWER_PLANT_RUN_SMOKE_URL`
+or `http://127.0.0.1:8787`. It creates 2, 3, and 4 player bot rooms, verifies
+the bot joins and moves, then deletes every smoke room it created.
 
 Runtime secrets are stored in Cloudflare, not in this repository:
 
