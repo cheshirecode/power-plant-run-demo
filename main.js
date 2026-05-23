@@ -184,7 +184,6 @@ const EXPLOSION_START = 7200;
 const ESCAPE_START = 8350;
 const REBUILD_START = 12850;
 const REBUILD_END = 15800;
-const ESCAPE_ZONE = { x: 18, y: 174, w: 66, h: 34 };
 
 const squad = [
   {
@@ -531,6 +530,18 @@ function hash2d(x, y, seed = 0) {
 }
 
 function setStatus(loop) {
+  if (sessionState.room) {
+    const room = sessionState.room;
+    let next = `Room ${room.phase}`;
+    if (room.phase === "repair") next = `Detonation in ${getCountdownSeconds()}s`;
+    if (room.phase === "summary") next = "Round summary";
+    if (next !== lastStatus) {
+      statusText.textContent = next;
+      lastStatus = next;
+    }
+    return;
+  }
+
   const { elapsed, cycle } = loop;
   let next = cycle > 0 ? "Squad returning" : "Squad approaching";
   if (elapsed > 5100) next = "Entering the plant";
@@ -599,7 +610,8 @@ function updateRoomStatus(nextStatus = null) {
   const playerCount = sessionState.room ? Object.keys(sessionState.room.players || {}).length : 1;
   const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
   const phase = sessionState.room?.phase || "room";
-  roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/${targetCount} · ${phase}`;
+  const suffix = phase === "repair" ? ` · ${getCountdownSeconds()}s` : "";
+  roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/${targetCount} · ${phase}${suffix}`;
 }
 
 function updateRoomSheet() {
@@ -788,16 +800,9 @@ function handleCanvasClick(event) {
   const point = getCanvasPoint(event);
   setControlTarget(point);
   if (sessionState.room.phase === "repair") {
-    const node = getHitRepairNode(point);
-    if (node && !node.repaired) {
-      sendRoomMessage({ type: "node:repair", nodeId: node.id });
-      return;
-    }
+    setControlTarget(point);
   }
 
-  if (sessionState.room.phase === "escape" && pointInRect(point, ESCAPE_ZONE)) {
-    sendRoomMessage({ type: "player:escape" });
-  }
 }
 
 function handleCanvasPointerMove(event) {
@@ -812,9 +817,9 @@ function setControlTarget(point) {
   };
 }
 
-function getHitRepairNode(point) {
-  const nodes = sessionState.room?.nodes || [];
-  return nodes.find((node) => Math.hypot(point.x - node.x, point.y - node.y) <= 14);
+function getCountdownSeconds() {
+  if (!sessionState.room?.countdownEndsAt) return 0;
+  return Math.max(0, Math.ceil((sessionState.room.countdownEndsAt - Date.now()) / 1000));
 }
 
 function getCanvasPoint(event) {
@@ -823,10 +828,6 @@ function getCanvasPoint(event) {
     x: ((event.clientX - rect.left) / rect.width) * VIEW.width,
     y: ((event.clientY - rect.top) / rect.height) * VIEW.height,
   };
-}
-
-function pointInRect(point, rect) {
-  return point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h;
 }
 
 function getRoomIdFromUrl() {
@@ -1594,6 +1595,12 @@ function drawRoomObjectives(style, time) {
   const room = sessionState.room;
   if (!room) return;
 
+  if ((room.phase === "repair" || room.phase === "explosion") && room.blast) {
+    ctx.globalAlpha = room.phase === "explosion" ? 0.24 : 0.12;
+    drawPixelCircle(room.blast.x, room.blast.y, room.blast.radius, style.scene.accent, style.scene.glow);
+    ctx.globalAlpha = 1;
+  }
+
   if (room.phase === "repair") {
     for (const node of room.nodes || []) {
       const pulse = 1 + Math.floor(Math.sin(time / 130 + node.x) * 2);
@@ -1602,22 +1609,44 @@ function drawRoomObjectives(style, time) {
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
       drawPixelCircle(node.x, node.y, node.repaired ? 7 : 9 + pulse, color, edge);
       px(node.x - 2, node.y - 2, 4, 4, node.repaired ? style.scene.groundDark : style.css.text);
+      ctx.fillStyle = style.css.text;
+      ctx.font = "6px monospace";
+      ctx.fillText(String(node.value), node.x - 3, node.y - 13);
       ctx.globalAlpha = 1;
     }
   }
 
-  if (room.phase === "escape") {
-    const blink = Math.sin(time / 120) > 0 ? style.scene.glow : style.scene.accent;
-    ctx.globalAlpha = 0.78;
-    px(ESCAPE_ZONE.x, ESCAPE_ZONE.y, ESCAPE_ZONE.w, ESCAPE_ZONE.h, "rgba(0, 0, 0, 0.42)");
-    drawPixelLine(ESCAPE_ZONE.x, ESCAPE_ZONE.y, ESCAPE_ZONE.x + ESCAPE_ZONE.w, ESCAPE_ZONE.y, 2, blink);
-    drawPixelLine(ESCAPE_ZONE.x, ESCAPE_ZONE.y + ESCAPE_ZONE.h, ESCAPE_ZONE.x + ESCAPE_ZONE.w, ESCAPE_ZONE.y + ESCAPE_ZONE.h, 2, blink);
-    drawPixelLine(ESCAPE_ZONE.x, ESCAPE_ZONE.y, ESCAPE_ZONE.x, ESCAPE_ZONE.y + ESCAPE_ZONE.h, 2, blink);
-    drawPixelLine(ESCAPE_ZONE.x + ESCAPE_ZONE.w, ESCAPE_ZONE.y, ESCAPE_ZONE.x + ESCAPE_ZONE.w, ESCAPE_ZONE.y + ESCAPE_ZONE.h, 2, blink);
-    ctx.fillStyle = style.css.text;
-    ctx.font = "6px monospace";
-    ctx.fillText("ESCAPE", ESCAPE_ZONE.x + 13, ESCAPE_ZONE.y + 20);
-    ctx.globalAlpha = 1;
+}
+
+function drawRoomHud(style) {
+  const room = sessionState.room;
+  if (!room) return;
+
+  const local = room.players?.[sessionState.user?.login];
+  px(8, 8, 118, 24, "rgba(0, 0, 0, 0.58)");
+  ctx.fillStyle = style.css.text;
+  ctx.font = "7px monospace";
+  ctx.fillText(`TIME ${getCountdownSeconds()}s`, 14, 18);
+  ctx.fillText(`SCORE ${local?.score || 0}`, 14, 28);
+
+  if (room.phase === "summary" && room.summary) {
+    drawRoundSummary(style, room.summary);
+  }
+}
+
+function drawRoundSummary(style, summary) {
+  const panelX = 118;
+  const panelY = 54;
+  px(panelX, panelY, 150, 88, "rgba(0, 0, 0, 0.72)");
+  px(panelX, panelY, 150, 3, style.scene.accent);
+  ctx.fillStyle = style.css.text;
+  ctx.font = "8px monospace";
+  ctx.fillText("ROUND SUMMARY", panelX + 18, panelY + 18);
+  ctx.font = "7px monospace";
+  for (let i = 0; i < summary.length; i += 1) {
+    const row = summary[i];
+    const label = row.caughtInBlast ? "BLAST" : "CLEAR";
+    ctx.fillText(`${row.id.slice(0, 8)} ${row.score} ${label}`, panelX + 12, panelY + 34 + i * 12);
   }
 }
 
@@ -1981,6 +2010,7 @@ function render(now) {
   drawRoomObjectives(style, now);
   if (sessionState.room) {
     drawRoomPlayers(style);
+    drawRoomHud(style);
   } else {
     drawSquad(style, loop.elapsed, now);
   }

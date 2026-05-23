@@ -7,15 +7,21 @@ const SESSION_COOKIE = "ppr_session";
 const STATE_COOKIE = "ppr_oauth_state";
 const NEXT_COOKIE = "ppr_oauth_next";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
-const REPAIR_DURATION_MS = 18_000;
-const ESCAPE_DURATION_MS = 7_000;
+const ROUND_COUNTDOWN_MS = 20_000;
 const EXPLOSION_DURATION_MS = 2_200;
-const REBUILD_DURATION_MS = 3_800;
+const SUMMARY_DURATION_MS = 5_000;
+const REBUILD_DURATION_MS = 2_800;
+const NODE_VALUE_MIN = 5;
+const NODE_VALUE_MAX = 10;
+const NODE_REPAIR_RADIUS = 12;
+const BLAST_CENTER = { x: 244, y: 108 };
+const BLAST_RADIUS_BASE = 92;
+const BLAST_RADIUS_JITTER = 10;
 const MAX_PLAYERS = 4;
 const START_NODES = [
-  { id: "n1", x: 180, y: 120, repaired: false },
-  { id: "n2", x: 245, y: 90, repaired: false },
-  { id: "n3", x: 300, y: 140, repaired: false },
+  { id: "n1", x: 180, y: 120 },
+  { id: "n2", x: 245, y: 90 },
+  { id: "n3", x: 300, y: 140 },
 ];
 
 export class GameRoom {
@@ -30,6 +36,9 @@ export class GameRoom {
       targetPlayerCount: 2,
       startedAt: null,
       phaseStartedAt: null,
+      countdownEndsAt: null,
+      blast: null,
+      summary: null,
       players: {},
       nodes: cloneNodes(),
       score: 0,
@@ -79,8 +88,8 @@ export class GameRoom {
       role: this.nextRole(),
       x: 42,
       y: 178,
+      score: 0,
       ready: false,
-      escaped: false,
     };
 
     socket.send(
@@ -128,24 +137,11 @@ export class GameRoom {
     }
 
     if (message.type === "move" || message.type === "player:move") {
-      this.updatePlayerPosition(playerId, message);
+      await this.updatePlayerPosition(playerId, message);
       this.broadcastState("room:state");
       return;
     }
 
-    if (message.type === "repair" || message.type === "node:repair") {
-      await this.repairNode(playerId, String(message.nodeId || ""));
-      this.broadcastState("node:repair");
-      return;
-    }
-
-    if (message.type === "escape" || message.type === "player:escape") {
-      this.roomState.players[playerId].escaped = true;
-      if (Object.values(this.roomState.players).every((player) => player.escaped)) {
-        await this.setPhase("explosion", EXPLOSION_DURATION_MS);
-      }
-      this.broadcastState("player:escape");
-    }
   }
 
   async maybeStartRun() {
@@ -158,33 +154,39 @@ export class GameRoom {
     this.roomState.startedAt = Date.now();
     this.roomState.nodes = cloneNodes();
     this.roomState.score = 0;
+    this.roomState.summary = null;
+    this.roomState.blast = makeBlast();
+    this.roomState.countdownEndsAt = Date.now() + ROUND_COUNTDOWN_MS;
     for (const player of players) {
-      player.escaped = false;
+      player.score = 0;
+      player.caughtInBlast = false;
     }
-    await this.setPhase("repair", REPAIR_DURATION_MS);
+    await this.setPhase("repair", ROUND_COUNTDOWN_MS);
   }
 
-  updatePlayerPosition(playerId, message) {
+  async updatePlayerPosition(playerId, message) {
     const player = this.roomState.players[playerId];
     if (!player) return;
 
     player.x = clampNumber(message.x, 0, 384);
     player.y = clampNumber(message.y, 0, 216);
+    await this.captureReachedNodes(playerId, player);
   }
 
-  async repairNode(playerId, nodeId) {
+  async captureReachedNodes(playerId, player) {
     if (this.roomState.phase !== "repair") return;
 
-    const node = this.roomState.nodes.find((item) => item.id === nodeId);
-    if (!node || node.repaired) return;
+    for (const node of this.roomState.nodes) {
+      if (node.repaired) continue;
+      if (Math.hypot(player.x - node.x, player.y - node.y) > NODE_REPAIR_RADIUS) continue;
 
-    node.repaired = true;
-    node.repairedBy = playerId;
-    node.repairedAt = Date.now();
-    this.roomState.score += 1;
-
-    if (this.roomState.nodes.every((item) => item.repaired)) {
-      await this.setPhase("escape", ESCAPE_DURATION_MS);
+      node.repaired = true;
+      node.repairedBy = playerId;
+      node.repairedAt = Date.now();
+      player.score += node.value;
+      this.roomState.score += node.value;
+      this.roomState.countdownEndsAt += node.value * 1000;
+      await this.state.storage.setAlarm(this.roomState.countdownEndsAt + 50);
     }
   }
 
@@ -198,11 +200,13 @@ export class GameRoom {
     if (!phaseStartedAt || this.roomState.phase === "lobby") return;
 
     const elapsed = Date.now() - phaseStartedAt;
-    if (this.roomState.phase === "repair" && elapsed >= REPAIR_DURATION_MS) {
-      await this.setPhase("escape", ESCAPE_DURATION_MS);
-    } else if (this.roomState.phase === "escape" && elapsed >= ESCAPE_DURATION_MS) {
+    if (this.roomState.phase === "repair" && Date.now() >= this.roomState.countdownEndsAt) {
+      this.applyBlast();
       await this.setPhase("explosion", EXPLOSION_DURATION_MS);
     } else if (this.roomState.phase === "explosion" && elapsed >= EXPLOSION_DURATION_MS) {
+      this.createSummary();
+      await this.setPhase("summary", SUMMARY_DURATION_MS);
+    } else if (this.roomState.phase === "summary" && elapsed >= SUMMARY_DURATION_MS) {
       await this.setPhase("rebuild", REBUILD_DURATION_MS);
     } else if (this.roomState.phase === "rebuild" && elapsed >= REBUILD_DURATION_MS) {
       this.finishRebuild();
@@ -223,13 +227,35 @@ export class GameRoom {
     this.roomState.phase = "lobby";
     this.roomState.phaseStartedAt = null;
     this.roomState.startedAt = null;
+    this.roomState.countdownEndsAt = null;
     this.roomState.upgradeLevel += this.roomState.score >= 2 ? 1 : 0;
     this.roomState.nodes = cloneNodes();
     this.roomState.score = 0;
     for (const player of Object.values(this.roomState.players)) {
       player.ready = false;
-      player.escaped = false;
+      player.caughtInBlast = false;
     }
+  }
+
+  applyBlast() {
+    const blast = this.roomState.blast || makeBlast();
+    for (const player of Object.values(this.roomState.players)) {
+      const caught = Math.hypot(player.x - blast.x, player.y - blast.y) <= blast.radius;
+      player.caughtInBlast = caught;
+      if (caught) {
+        player.score = 0;
+      }
+    }
+  }
+
+  createSummary() {
+    this.roomState.summary = Object.values(this.roomState.players)
+      .map((player) => ({
+        id: player.id,
+        score: player.score,
+        caughtInBlast: Boolean(player.caughtInBlast),
+      }))
+      .sort((a, b) => b.score - a.score);
   }
 
   nextRole() {
@@ -253,7 +279,20 @@ export class GameRoom {
 }
 
 function cloneNodes() {
-  return START_NODES.map((node) => ({ ...node }));
+  return START_NODES.map((node, index) => ({
+    ...node,
+    repaired: false,
+    value: NODE_VALUE_MIN + Math.floor(Math.random() * (NODE_VALUE_MAX - NODE_VALUE_MIN + 1)),
+    seed: Math.random() + index,
+  }));
+}
+
+function makeBlast() {
+  return {
+    x: BLAST_CENTER.x,
+    y: BLAST_CENTER.y,
+    radius: BLAST_RADIUS_BASE + Math.round((Math.random() * 2 - 1) * BLAST_RADIUS_JITTER),
+  };
 }
 
 function clampNumber(value, min, max) {
