@@ -26,7 +26,6 @@ const BLAST_CENTER = { x: 244, y: 108 };
 const BLAST_RADIUS_BASE = 92;
 const BLAST_RADIUS_JITTER = 10;
 const MAX_PLAYERS = 4;
-const knownRoomIds = new Set();
 const START_NODES = [
   { id: "n1", x: 72, y: 176 },
   { id: "n2", x: 94, y: 70 },
@@ -45,6 +44,7 @@ export class GameRoom {
     this.state = state;
     this.env = env;
     this.sessions = new Map();
+    this.loaded = false;
     this.roomState = {
       phase: "lobby",
       cycle: 0,
@@ -65,11 +65,13 @@ export class GameRoom {
   }
 
   async fetch(request) {
+    await this.loadRoomState();
     await this.advanceTimedPhase();
     const url = new URL(request.url);
     const roomMatch = url.pathname.match(/^\/(?:api|ws)\/rooms\/([^/]+)$/);
     if (roomMatch && !this.roomState.id) {
       this.roomState.id = roomMatch[1].toLowerCase();
+      await this.persistRoomState();
     }
     if (request.headers.get("X-PPR-Room-Status") === "1") {
       return json({ ok: true, room: this.roomSummary() });
@@ -98,7 +100,7 @@ export class GameRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.acceptPlayer(server, player, spectate);
+    await this.acceptPlayer(server, player, spectate);
 
     return new Response(null, {
       status: 101,
@@ -106,13 +108,33 @@ export class GameRoom {
     });
   }
 
-  acceptPlayer(socket, player, spectate = false) {
+  async loadRoomState() {
+    if (this.loaded) return;
+    const stored = await this.state.storage.get("roomState");
+    if (stored) {
+      this.roomState = {
+        ...this.roomState,
+        ...stored,
+        players: stored.players || {},
+        nodes: stored.nodes || cloneNodes(),
+      };
+    }
+    this.loaded = true;
+  }
+
+  async persistRoomState() {
+    await this.state.storage.put("roomState", this.roomState);
+  }
+
+  async acceptPlayer(socket, player, spectate = false) {
     socket.accept();
     const playerId = player.id;
     this.sessions.set(socket, playerId);
     const existingPlayer = this.roomState.players[playerId];
     const activePlayers = Object.values(this.roomState.players).filter((player) => !player.spectator);
-    const isSpectator = spectate || this.roomState.phase !== "lobby" || (!existingPlayer && activePlayers.length >= this.roomState.targetPlayerCount);
+    const isSpectator = existingPlayer
+      ? existingPlayer.spectator
+      : spectate || this.roomState.phase !== "lobby" || activePlayers.length >= this.roomState.targetPlayerCount;
     this.roomState.players[playerId] ||= {
       id: playerId,
       login: player.login,
@@ -126,9 +148,12 @@ export class GameRoom {
       ready: false,
       spectator: isSpectator,
     };
+    this.roomState.players[playerId].connected = true;
+    delete this.roomState.players[playerId].disconnectedAt;
     if (!this.roomState.ownerId && !this.roomState.players[playerId].spectator) {
       this.roomState.ownerId = playerId;
     }
+    await this.persistRoomState();
 
     socket.send(
       JSON.stringify({
@@ -146,19 +171,35 @@ export class GameRoom {
     });
 
     const leave = () => {
-      this.sessions.delete(socket);
-      const hasOtherSession = Array.from(this.sessions.values()).some((sessionPlayerId) => sessionPlayerId === playerId);
-      if (!hasOtherSession) {
+      this.handleLeave(socket, playerId).catch(() => {});
+    };
+    socket.addEventListener("close", leave);
+    socket.addEventListener("error", leave);
+  }
+
+  async handleLeave(socket, playerId) {
+    this.sessions.delete(socket);
+    const hasOtherSession = Array.from(this.sessions.values()).some((sessionPlayerId) => sessionPlayerId === playerId);
+    if (!hasOtherSession) {
+      const leavingPlayer = this.roomState.players[playerId];
+      if (leavingPlayer && !leavingPlayer.spectator && this.roomState.phase !== "lobby") {
+        leavingPlayer.connected = false;
+        leavingPlayer.disconnectedAt = Date.now();
+        if (this.roomState.ownerId === playerId) {
+          this.roomState.ownerId = Object.values(this.roomState.players).find(
+            (nextPlayer) => !nextPlayer.spectator && nextPlayer.connected !== false,
+          )?.id || null;
+        }
+      } else {
         delete this.roomState.players[playerId];
         delete this.roomState.replayVotes[playerId];
         if (this.roomState.ownerId === playerId) {
           this.roomState.ownerId = Object.values(this.roomState.players).find((nextPlayer) => !nextPlayer.spectator)?.id || null;
         }
       }
-      this.broadcastState("player:left");
-    };
-    socket.addEventListener("close", leave);
-    socket.addEventListener("error", leave);
+      await this.persistRoomState();
+    }
+    this.broadcastState("player:left");
   }
 
   async handleMessage(socket, rawMessage) {
@@ -179,6 +220,7 @@ export class GameRoom {
       if (this.roomState.phase !== "lobby") return;
       this.roomState.players[playerId].ready = Boolean(message.ready);
       await this.maybeStartRun();
+      await this.persistRoomState();
       this.broadcastState("room:state");
       return;
     }
@@ -189,6 +231,7 @@ export class GameRoom {
       if (!player || player.spectator) return;
       this.roomState.replayVotes[playerId] = true;
       await this.maybeReplayRun();
+      await this.persistRoomState();
       this.broadcastState("room:state");
       return;
     }
@@ -203,6 +246,7 @@ export class GameRoom {
       if (this.roomState.players[playerId].spectator) return;
       if (this.roomState.phase !== "repair") return;
       await this.updatePlayerPosition(playerId, message);
+      await this.persistRoomState();
       this.broadcastState("room:state");
       return;
     }
@@ -218,7 +262,7 @@ export class GameRoom {
   }
 
   async maybeReplayRun() {
-    const players = Object.values(this.roomState.players).filter((player) => !player.spectator);
+    const players = Object.values(this.roomState.players).filter((player) => !player.spectator && player.connected !== false);
     if (players.length === 0) return;
     if (!players.every((player) => this.roomState.replayVotes[player.id])) return;
     await this.startRun(false);
@@ -244,6 +288,7 @@ export class GameRoom {
       player.ready = false;
     }
     await this.setPhase("repair", ROUND_COUNTDOWN_MS);
+    await this.persistRoomState();
   }
 
   async updatePlayerPosition(playerId, message) {
@@ -301,6 +346,7 @@ export class GameRoom {
     this.roomState.score = roundValue(this.roomState.score + node.value);
     this.roomState.countdownEndsAt += Math.round(node.value * 1000);
     await this.scheduleNextRepairAlarm();
+    await this.persistRoomState();
   }
 
   async alarm() {
@@ -331,6 +377,7 @@ export class GameRoom {
   async setPhase(phase, durationMs = null) {
     this.roomState.phase = phase;
     this.roomState.phaseStartedAt = Date.now();
+    await this.persistRoomState();
     if (durationMs) {
       await this.state.storage.setAlarm(Date.now() + durationMs + 50);
     }
@@ -373,23 +420,23 @@ export class GameRoom {
     this.roomState.closed = true;
     this.roomState.phase = "closed";
     this.roomState.replayVotes = {};
+    await this.persistRoomState();
     this.broadcast({ type: "room:closed", state: this.roomState });
-    for (const socket of this.sessions.keys()) {
-      socket.close(1000, "Room closed");
-    }
   }
 
   roomSummary() {
     const players = Object.values(this.roomState.players);
-    const activeCount = players.filter((player) => !player.spectator).length;
-    const spectatorCount = players.filter((player) => player.spectator).length;
+    const activePlayers = players.filter((player) => !player.spectator);
+    const spectatorPlayers = players.filter((player) => player.spectator);
     return {
       id: this.roomState.id,
       phase: this.roomState.phase,
       targetPlayerCount: this.roomState.targetPlayerCount,
-      activeCount,
-      spectatorCount,
-      openSlots: Math.max(0, this.roomState.targetPlayerCount - activeCount),
+      activeCount: activePlayers.length,
+      spectatorCount: spectatorPlayers.length,
+      activePlayerIds: activePlayers.map((player) => player.id),
+      spectatorPlayerIds: spectatorPlayers.map((player) => player.id),
+      openSlots: Math.max(0, this.roomState.targetPlayerCount - activePlayers.length),
       ownerId: this.roomState.ownerId,
       closed: Boolean(this.roomState.closed),
       cycle: this.roomState.cycle,
@@ -413,6 +460,40 @@ export class GameRoom {
         socket.send(payload);
       }
     }
+  }
+}
+
+export class RoomDirectory {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const roomIds = new Set((await this.state.storage.get("roomIds")) || []);
+
+    if (request.method === "GET") {
+      return json({ roomIds: [...roomIds] });
+    }
+
+    const roomId = url.searchParams.get("roomId");
+    if (!roomId || !ROOM_ID_PATTERN.test(roomId)) {
+      return json({ error: "Invalid room id" }, 400);
+    }
+
+    if (request.method === "POST") {
+      roomIds.add(roomId);
+      await this.state.storage.put("roomIds", [...roomIds]);
+      return json({ ok: true });
+    }
+
+    if (request.method === "DELETE") {
+      roomIds.delete(roomId);
+      await this.state.storage.put("roomIds", [...roomIds]);
+      return json({ ok: true });
+    }
+
+    return json({ error: "Method not allowed" }, 405);
   }
 }
 
@@ -490,6 +571,37 @@ function makeBlast() {
   };
 }
 
+function getDirectory(env) {
+  return env.DIRECTORY.get(env.DIRECTORY.idFromName("global"));
+}
+
+async function registerRoom(env, roomId) {
+  try {
+    await getDirectory(env).fetch(`https://internal/directory?roomId=${roomId}`, { method: "POST" });
+  } catch {
+    // Direct room links still work if the directory is temporarily unavailable.
+  }
+}
+
+async function forgetRoom(env, roomId) {
+  try {
+    await getDirectory(env).fetch(`https://internal/directory?roomId=${roomId}`, { method: "DELETE" });
+  } catch {
+    // Stale rooms are harmless; the next listing pass can try again.
+  }
+}
+
+async function listRoomIds(env) {
+  try {
+    const response = await getDirectory(env).fetch("https://internal/directory");
+    if (!response.ok) return [];
+    const payload = await response.json();
+    return Array.isArray(payload.roomIds) ? payload.roomIds : [];
+  } catch {
+    return [];
+  }
+}
+
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, Number(value) || 0));
 }
@@ -541,20 +653,32 @@ export default {
       }
 
       const rooms = [];
-      for (const roomId of knownRoomIds) {
-        const objectId = env.ROOMS.idFromName(roomId);
-        const room = env.ROOMS.get(objectId);
-        const statusResponse = await room.fetch(
-          new Request(`https://internal/api/rooms/${roomId}`, {
-            headers: { "X-PPR-Room-Status": "1" },
-          }),
-        );
-        if (!statusResponse.ok) continue;
-        const status = await statusResponse.json();
-        if (status.room?.closed) {
-          knownRoomIds.delete(roomId);
-        } else if (status.room?.activeCount > 0 || status.room?.phase !== "lobby") {
-          rooms.push(status.room);
+      for (const roomId of await listRoomIds(env)) {
+        try {
+          const objectId = env.ROOMS.idFromName(roomId);
+          const room = env.ROOMS.get(objectId);
+          const statusResponse = await room.fetch(
+            new Request(`https://internal/api/rooms/${roomId}`, {
+              headers: { "X-PPR-Room-Status": "1" },
+            }),
+          );
+          if (!statusResponse.ok) continue;
+          const status = await statusResponse.json();
+          if (status.room?.closed) {
+            await forgetRoom(env, roomId);
+          } else if (status.room?.activeCount > 0 || status.room?.phase !== "lobby") {
+            const viewerId = sanitizePlayerId(session.user.login);
+            rooms.push({
+              ...status.room,
+              viewerRole: status.room.activePlayerIds?.includes(viewerId)
+                ? "active"
+                : status.room.spectatorPlayerIds?.includes(viewerId)
+                  ? "spectator"
+                  : "none",
+            });
+          }
+        } catch {
+          // One bad room must not take down the whole directory.
         }
       }
 
@@ -576,7 +700,7 @@ export default {
         targetPlayerCount = 2;
       }
       const roomId = crypto.randomUUID().slice(0, 8);
-      knownRoomIds.add(roomId);
+      await registerRoom(env, roomId);
       return json({
         roomId,
         targetPlayerCount,
@@ -591,7 +715,7 @@ export default {
         return json({ error: "Invalid room id" }, 400);
       }
 
-      knownRoomIds.add(roomId);
+      await registerRoom(env, roomId);
       const objectId = env.ROOMS.idFromName(roomId);
       const room = env.ROOMS.get(objectId);
       return room.fetch(request);

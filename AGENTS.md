@@ -49,3 +49,8 @@ Deploy with `npm run deploy` after checks pass. Never commit secrets, `.dev.vars
 - Countdown reaching zero must always advance to explosion and then `end`.
 - Ended rooms show score summary and replay controls, not the live board.
 - Room owners can close the room; all clients should return to the starting screen.
+- Active room membership is identity-scoped, not socket-scoped. If an active player disconnects after the game starts, keep their slot and mark them disconnected so they can resume.
+- Never let the same GitHub user watch their own active slot. Directory rows should show Resume for rooms where `viewerRole` is `active` or `spectator`.
+- The room directory must be durable. Do not use module-level memory for discoverable room IDs; Worker isolates can reload while Durable Objects keep room state.
+- Room-list reads are best-effort. One bad/stale room summary must not make `/api/rooms` return 500 or blank the client UI.
+- Do not force-close sockets immediately after broadcasting `room:closed`; clients should receive the closed state and navigate home themselves.

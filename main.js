@@ -312,6 +312,7 @@ const sessionState = {
   nextRoomPollAt: 0,
   pollingRoom: false,
   rooms: [],
+  roomListError: "",
   loadingRooms: false,
   nextRoomListPollAt: 0,
 };
@@ -776,15 +777,7 @@ function connectRoom(roomId, options = {}) {
 
   socket.addEventListener("close", () => {
     if (sessionState.socket !== socket) return;
-    if (!sessionState.room) {
-      leaveRoom("Room unavailable");
-      return;
-    }
-    sessionState.socket = null;
-    sessionState.ready = false;
-    updateRoomStatus(sessionState.roomId ? "Disconnected" : "Solo");
-    updateSessionUi();
-    updateRoomSheet();
+    leaveRoom(sessionState.room ? "Disconnected" : "Room unavailable");
   });
 
   socket.addEventListener("error", () => {
@@ -837,9 +830,12 @@ async function loadRoomList() {
     if (response.ok) {
       const payload = await response.json();
       sessionState.rooms = Array.isArray(payload.rooms) ? payload.rooms : [];
+      sessionState.roomListError = "";
+    } else {
+      sessionState.roomListError = `Rooms unavailable (${response.status})`;
     }
   } catch {
-    // The list is a convenience; direct room links still work.
+    sessionState.roomListError = "Rooms unavailable";
   } finally {
     sessionState.loadingRooms = false;
     renderRoomList();
@@ -862,7 +858,7 @@ function renderRoomList() {
 
   const title = document.createElement("div");
   title.className = "room-list-title";
-  title.textContent = "Open rooms";
+  title.textContent = sessionState.roomListError || "Open rooms";
   roomList.append(title);
 
   const rooms = sessionState.rooms.filter((room) => !room.closed);
@@ -875,6 +871,7 @@ function renderRoomList() {
   }
 
   for (const room of rooms) {
+    const viewerIsHere = room.viewerRole === "active" || room.viewerRole === "spectator";
     const row = document.createElement("div");
     row.className = "room-list-row";
 
@@ -885,8 +882,8 @@ function renderRoomList() {
     const joinButton = document.createElement("button");
     joinButton.type = "button";
     joinButton.className = "room-list-button";
-    joinButton.textContent = "Join";
-    joinButton.disabled = room.openSlots < 1;
+    joinButton.textContent = viewerIsHere ? "Resume" : "Join";
+    joinButton.disabled = !viewerIsHere && room.openSlots < 1;
     joinButton.addEventListener("click", () => connectRoom(room.id));
     row.append(joinButton);
 
@@ -894,6 +891,7 @@ function renderRoomList() {
     spectateButton.type = "button";
     spectateButton.className = "room-list-button";
     spectateButton.textContent = "Watch";
+    spectateButton.disabled = viewerIsHere;
     spectateButton.addEventListener("click", () => connectRoom(room.id, { spectate: true }));
     row.append(spectateButton);
 
