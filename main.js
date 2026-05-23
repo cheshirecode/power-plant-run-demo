@@ -1,5 +1,20 @@
 import { countdownLabel, countdownMs, countdownSeconds, formatHoldLabel, formatNodeValue, formatScore } from "./client/formatters.js";
 import { buildRoomUrl, clearRoomUrl, getRoomIdFromUrl, normalizeRoomId, updateRoomUrl } from "./client/room-url.js";
+import {
+  PLAYER_STATES,
+  SKILL_CONFIG,
+  SKILL_IDS,
+  canSkillClaimNode,
+  findBestWarpNode,
+  getBoostIntervalMs,
+  getCaptureDurationMs,
+  getNodeScoreValue,
+  getSkillCooldownRatio,
+  isBoostActive,
+  isHighValueNode,
+  isPointInStasis,
+  isStasisPulseActive,
+} from "./client/skill-mechanics.js";
 
 const canvas = document.querySelector("#game-canvas");
 const ctx = canvas.getContext("2d", { alpha: false });
@@ -201,17 +216,11 @@ const REBUILD_END = LOOP_DURATION;
 const DEMO_TIME_SCALE = 1;
 const DEMO_REPAIR_DURATION = 20000;
 const DEMO_MAX_REPAIR_ELAPSED = 30000;
-const DEMO_NODE_SPAWN_MS = 2000;
-const DEMO_INITIAL_NODE_COUNT = 20;
+const DEMO_NODE_SPAWN_MS = 3000;
+const DEMO_INITIAL_NODE_COUNT = 40;
+const DEMO_NODE_SPAWN_PER_PLAYER_MULTIPLIER = 1.5;
 const DEMO_RUNNER_SPEED = 2.15;
 const DEMO_ESCAPE_THRESHOLD_MS = 4800;
-const DEMO_BOOST_ACTIVE_MS = 1000;
-const DEMO_BOOST_COOLDOWN_MS = 3000;
-const DEMO_BOOST_MULTIPLIER = 3;
-const DEMO_STASIS_COOLDOWN_MS = 3000;
-const DEMO_STASIS_RADIUS = 138;
-const DEMO_STASIS_PULSE_MS = 260;
-const DEMO_STASIS_FREEZE_MS = 1000;
 const DEMO_NODE_TIMER_FACTOR_MS = 900;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
@@ -227,7 +236,7 @@ const DEMO_PATH_POINTS = [
   { x: 620, y: 300 },
   { x: VIEW.width, y: 346 },
 ];
-const demoNodes = [
+const baseDemoNodes = [
   { id: "dn1", x: 76, y: 338, value: 2.4, size: 8, holdMs: 1200 },
   { id: "dn2", x: 126, y: 94, value: -3.2, size: 8, holdMs: 1600 },
   { id: "dn3", x: 238, y: 354, value: -4.8, size: 9, holdMs: 2400 },
@@ -252,13 +261,14 @@ const demoNodes = [
   { id: "dn22", x: 438, y: 398, value: -3.7, size: 8, holdMs: 1700 },
   { id: "dn23", x: 224, y: 168, value: 6.7, size: 10, holdMs: 3100, bonus: true },
   { id: "dn24", x: 632, y: 380, value: 5.9, size: 9, holdMs: 2600 },
-].map(normalizeDemoNode);
+];
+const demoNodes = buildDemoNodePool(96).map(normalizeDemoNode);
 const demoAbilities = [
-  { id: "boost", label: "BOOST", name: "Overclock Boots", hint: "3x burst", color: "#70a8ff", accent: "#f1e8cf" },
+  { id: "boost", label: "BOOST", name: "Overclock Boots", hint: "2x burst", color: "#70a8ff", accent: "#f1e8cf" },
   { id: "magnet", label: "MAG", name: "Magnet Gloves", hint: "claim farther", color: "#57d56c", accent: "#d7ffd8" },
-  { id: "stasis", label: "STASIS", name: "Stasis Popper", hint: "freezes rivals", color: "#9fdfff", accent: "#f1e8cf" },
-  { id: "warp", label: "WARP", name: "Portal Boots", hint: "short hops", color: "#d5983b", accent: "#f1e8cf" },
-  { id: "greed", label: "GREED", name: "Greedy Wrench", hint: "fast rich nodes", color: "#ff6b28", accent: "#ffe28f" },
+  { id: "stasis", label: "STASIS", name: "Stasis Popper", hint: "freezes rivals/nodes", color: "#9fdfff", accent: "#f1e8cf" },
+  { id: "warp", label: "WARP", name: "Portal Boots", hint: "jumps to best node", color: "#d5983b", accent: "#f1e8cf" },
+  { id: "greed", label: "GREED", name: "Greedy Wrench", hint: "small fast 75%", color: "#ff6b28", accent: "#ffe28f" },
 ];
 const DEMO_ONLY_ABILITY_IDS = new Set(demoAbilities.map((ability) => ability.id));
 
@@ -640,11 +650,11 @@ function updateDemoAudio(style, loop, time) {
     const abilityId = actor.ability?.id;
     if (!abilityId || actor.phase !== "repair") continue;
     if (abilityId === "boost" && actor.boostActive) {
-      cueDemoAbilitySound(`${loop.cycle}:boost:${actor.member.id}:${Math.floor(repairElapsed / getDemoBoostIntervalMs())}`, abilityId);
+      cueDemoAbilitySound(`${loop.cycle}:boost:${actor.member.id}:${Math.floor(repairElapsed / getBoostIntervalMs())}`, abilityId);
     } else if (abilityId === "warp" && actor.warpHopActive && repairElapsed % 1800 < 180) {
       cueDemoAbilitySound(`${loop.cycle}:warp:${actor.member.id}:${Math.floor(repairElapsed / 1800)}`, abilityId);
     } else if (abilityId === "stasis" && actor.stasisPulse) {
-      cueDemoAbilitySound(`${loop.cycle}:stasis:${actor.member.id}:${Math.floor(repairElapsed / DEMO_STASIS_COOLDOWN_MS)}`, abilityId);
+      cueDemoAbilitySound(`${loop.cycle}:stasis:${actor.member.id}:${Math.floor(repairElapsed / SKILL_CONFIG.stasis.cooldownMs)}`, abilityId);
     } else if ((abilityId === "greed" || abilityId === "magnet") && actor.activeNode) {
       cueDemoAbilitySound(`${loop.cycle}:${abilityId}:${actor.member.id}:${actor.activeNode.id}`, abilityId);
     }
@@ -786,10 +796,38 @@ function normalizeDemoNode(node) {
   };
 }
 
+function buildDemoNodePool(count) {
+  const nodes = [...baseDemoNodes];
+  let candidate = 0;
+  while (nodes.length < count && candidate < 500) {
+    const x = 42 + Math.floor(hash2d(candidate + 9, 3, 19) * (VIEW.width - 84));
+    const y = 38 + Math.floor(hash2d(candidate + 13, 17, 5) * (VIEW.height - 76));
+    candidate += 1;
+    if (Math.hypot(x - DEMO_BLAST.x, y - DEMO_BLAST.y) < 42) continue;
+    if (nodes.some((node) => Math.hypot(node.x - x, node.y - y) < 28)) continue;
+    const distance = Math.hypot(x - DEMO_BLAST.x, y - DEMO_BLAST.y);
+    const bonus = hash2d(x, y, candidate) > 0.82;
+    const negative = distance > DEMO_RED_EXCLUSION_RADIUS && hash2d(x, y, candidate + 41) < 0.58;
+    const baseValue = 2.1 + hash2d(x, y, candidate + 7) * 5.4;
+    const value = Number((baseValue * (negative ? -1 : 1)).toFixed(2));
+    nodes.push({
+      id: `dn${nodes.length + 1}`,
+      x,
+      y,
+      value,
+      size: bonus ? 10 : 8 + Math.floor(hash2d(x, y, candidate + 11) * 3),
+      holdMs: Math.round(Math.abs(value) * 470 + 650),
+      bonus,
+    });
+  }
+  return nodes;
+}
+
 function getDemoVisibleNodes(cycle, elapsed) {
+  const spawnedPerWave = Math.ceil(squad.length * DEMO_NODE_SPAWN_PER_PLAYER_MULTIPLIER);
   const spawnedCount = Math.min(
     demoNodes.length,
-    DEMO_INITIAL_NODE_COUNT + Math.floor(Math.max(0, elapsed) / DEMO_NODE_SPAWN_MS),
+    DEMO_INITIAL_NODE_COUNT + Math.floor(Math.max(0, elapsed) / DEMO_NODE_SPAWN_MS) * spawnedPerWave,
   );
   const cacheKey = `${cycle}:${spawnedCount}`;
   if (!demoVisibleNodeCache.has(cacheKey)) {
@@ -833,10 +871,14 @@ function getDemoNodeCandidates(member, index, cycle) {
   const spawn = member.spawn;
   const byPressure = (a, b) => a.value - b.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
   const byRiches = (a, b) => Math.abs(b.value) - Math.abs(a.value) || Math.hypot(a.x - DEMO_BLAST.x, a.y - DEMO_BLAST.y) - Math.hypot(b.x - DEMO_BLAST.x, b.y - DEMO_BLAST.y);
+  const byReachableGreed = (a, b) => {
+    const score = (node) => Math.abs(node.value) * 80 + (isHighValueNode(node) ? 120 : 0) - Math.hypot(node.x - spawn.x, node.y - spawn.y);
+    return score(b) - score(a);
+  };
   const byPositive = (a, b) => b.value - a.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
 
   if (ability.id === "greed") {
-    return [...visibleNodes].sort(byRiches);
+    return [...visibleNodes].sort(byReachableGreed);
   }
   if (ability.id === "stasis") {
     return [...visibleNodes].sort(byPressure);
@@ -871,29 +913,8 @@ function getDemoPathSpeed(ability) {
   return DEMO_RUNNER_SPEED * abilitySpeed;
 }
 
-function getDemoBoostIntervalMs() {
-  return DEMO_BOOST_ACTIVE_MS + DEMO_BOOST_COOLDOWN_MS;
-}
-
-function isDemoBoostActive(elapsed) {
-  return elapsed % getDemoBoostIntervalMs() < DEMO_BOOST_ACTIVE_MS;
-}
-
-function getDemoAbilityCooldownRatio(ability, elapsed) {
-  if (ability.id === "stasis") {
-    return 1 - (elapsed % DEMO_STASIS_COOLDOWN_MS) / DEMO_STASIS_COOLDOWN_MS;
-  }
-  if (ability.id === "boost") {
-    const interval = getDemoBoostIntervalMs();
-    const phase = elapsed % interval;
-    if (phase < DEMO_BOOST_ACTIVE_MS) return 1;
-    return 1 - (phase - DEMO_BOOST_ACTIVE_MS) / DEMO_BOOST_COOLDOWN_MS;
-  }
-  return null;
-}
-
 function getDemoTravelState(distance, baseSpeed, ability, startElapsed, availableMs) {
-  if (ability.id !== "boost") {
+  if (ability.id !== SKILL_IDS.boost) {
     const travelMs = Math.max(120, distance / baseSpeed);
     return {
       complete: availableMs >= travelMs,
@@ -906,10 +927,10 @@ function getDemoTravelState(distance, baseSpeed, ability, startElapsed, availabl
   let traveled = 0;
   while (elapsedMs < availableMs && traveled < distance) {
     const now = startElapsed + elapsedMs;
-    const phase = now % getDemoBoostIntervalMs();
-    const active = phase < DEMO_BOOST_ACTIVE_MS;
-    const nextBoundary = active ? DEMO_BOOST_ACTIVE_MS - phase : getDemoBoostIntervalMs() - phase;
-    const speed = baseSpeed * (active ? DEMO_BOOST_MULTIPLIER : 1);
+    const phase = now % getBoostIntervalMs();
+    const active = phase < SKILL_CONFIG.boost.activeMs;
+    const nextBoundary = active ? SKILL_CONFIG.boost.activeMs - phase : getBoostIntervalMs() - phase;
+    const speed = baseSpeed * (active ? SKILL_CONFIG.boost.speedMultiplier : 1);
     const remainingTime = availableMs - elapsedMs;
     const remainingDistance = distance - traveled;
     const timeToFinish = remainingDistance / speed;
@@ -926,11 +947,7 @@ function getDemoTravelState(distance, baseSpeed, ability, startElapsed, availabl
 }
 
 function getDemoHoldDurationMs(node, ability) {
-  const magnitude = Math.abs(node.value);
-  const highValue = magnitude >= 6 || node.bonus;
-  const abilityFactor = ability.id === "greed" && highValue ? 0.12 : ability.id === "greed" ? 0.46 : ability.id === "magnet" ? 0.62 : 0.68;
-  const minimumHold = ability.id === "greed" && highValue ? 360 : 1150;
-  return Math.max(minimumHold, Math.round(node.holdMs * abilityFactor));
+  return getCaptureDurationMs(node, ability.id);
 }
 
 function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
@@ -1032,10 +1049,11 @@ function getDemoDetonationPosition(member, index, cycle) {
 
 function getDemoRoundScore(member, index, loop) {
   const ability = getDemoAbility(member, loop.cycle);
-  const greedBonus = ability.id === "greed" ? 1.25 : 1;
   const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, Math.min(getDemoRepairElapsed(loop), getDemoDetonationElapsed(loop.cycle) - 1)));
   const repaired = demoNodes.filter((node) => repairedIds.has(node.id));
-  return repaired.reduce((score, node) => score + Math.abs(node.value) * greedBonus, 0);
+  return repaired.reduce((score, node) => {
+    return score + getNodeScoreValue(node, ability.id);
+  }, 0);
 }
 
 function getDemoPlayerOutcome(member, index, loop) {
@@ -1057,29 +1075,29 @@ function getDemoActorState(member, index, loop, time) {
   const detonated = isDemoDetonated(loop);
   const stasisSources = getDemoStasisPulseSources(repairElapsed, loop.cycle);
   const currentPosition = getDemoPlayPosition(member, index, loop.cycle, repairElapsed);
-  const frozen =
-    ability.id !== "stasis" &&
+  const inStasis =
+    ability.id !== SKILL_IDS.stasis &&
     !detonated &&
-    stasisSources.some((source) => Math.hypot(source.x - currentPosition.x, source.y - currentPosition.y) <= DEMO_STASIS_RADIUS);
+    isPointInStasis(currentPosition, stasisSources);
 
   if (!detonated) {
-    const adjustedElapsed = Math.max(0, repairElapsed - (frozen ? 850 : 0));
+    const adjustedElapsed = Math.max(0, repairElapsed - (inStasis ? 850 : 0));
     const basePosition = getDemoPlayPosition(member, index, loop.cycle, adjustedElapsed);
-    const warped = ability.id === "warp" && !frozen ? applyDemoWarpHop(member, index, loop.cycle, adjustedElapsed, basePosition) : null;
+    const warped = ability.id === SKILL_IDS.warp && !inStasis ? applyDemoWarpHop(member, index, loop.cycle, adjustedElapsed, basePosition) : null;
     const position = warped?.position || basePosition;
-    const boostActive = ability.id === "boost" && isDemoBoostActive(repairElapsed);
+    const boostActive = ability.id === SKILL_IDS.boost && isBoostActive(repairElapsed);
     return {
       ...position,
       member,
       ability,
-      phase: frozen ? "frozen" : "repair",
+      phase: inStasis ? PLAYER_STATES.stasis : "repair",
       stasisPulse: stasisSources.some((source) => source.memberId === member.id),
       boostActive,
-      skillCooldown: getDemoAbilityCooldownRatio(ability, repairElapsed),
+      skillCooldown: getSkillCooldownRatio(ability.id, repairElapsed),
       warpHopActive: Boolean(warped?.active),
-      frozenUntil: frozen ? time + 1000 : 0,
+      frozenUntil: inStasis ? time + SKILL_CONFIG.stasis.freezeMs : 0,
       progress: clamp(repairElapsed / getDemoDetonationElapsed(loop.cycle), 0, 1),
-      step: frozen || position.phase === "claim" ? 0 : Math.floor((time + index * 80) / (boostActive ? 58 : 110)) % 2,
+      step: inStasis || position.phase === "claim" ? 0 : Math.floor((time + index * 80) / (boostActive ? 58 : 110)) % 2,
       fade: 1,
       dissolve: 0,
     };
@@ -1129,23 +1147,24 @@ function getDemoActorState(member, index, loop, time) {
 }
 
 function applyDemoWarpHop(member, index, cycle, elapsed, position) {
-  const phaseElapsed = elapsed % 1800;
-  if (phaseElapsed >= 320 || position.phase !== "move") return { position, active: false };
+  const phaseElapsed = elapsed % SKILL_CONFIG.warp.cooldownMs;
+  if (phaseElapsed >= SKILL_CONFIG.warp.activeMs || position.phase !== "move") return { position, active: false };
 
-  const future = getDemoPlayPosition(member, index, cycle, elapsed + 260);
-  const dx = future.x - position.x;
-  const dy = future.y - position.y;
-  const distance = Math.hypot(dx, dy);
-  if (distance < 0.5) return { position, active: false };
+  const targetNode = findBestWarpNode(position, getDemoVisibleNodes(cycle, elapsed));
+  if (!targetNode) return { position, active: false };
 
-  const pulse = Math.sin((phaseElapsed / 320) * Math.PI);
-  const hopDistance = 34 * pulse;
+  const pulse = Math.sin((phaseElapsed / SKILL_CONFIG.warp.activeMs) * Math.PI);
   return {
     active: true,
+    targetNode,
     position: {
       ...position,
-      x: position.x + (dx / distance) * hopDistance,
-      y: position.y + (dy / distance) * hopDistance,
+      x: lerp(position.x, targetNode.x, pulse),
+      y: lerp(position.y, targetNode.y, pulse),
+      activeNode: pulse > 0.82 ? targetNode : position.activeNode,
+      phase: pulse > 0.82 ? "claim" : position.phase,
+      holdRemainingMs: pulse > 0.82 ? getCaptureDurationMs(targetNode, SKILL_IDS.warp) : position.holdRemainingMs,
+      holdDurationMs: pulse > 0.82 ? getCaptureDurationMs(targetNode, SKILL_IDS.warp) : position.holdDurationMs,
     },
   };
 }
@@ -1155,7 +1174,7 @@ function isDemoStasisPulseActive(elapsed, cycle) {
 }
 
 function getDemoStasisPulseSources(elapsed, cycle) {
-  if (elapsed >= EXPLOSION_START || elapsed % DEMO_STASIS_COOLDOWN_MS >= DEMO_STASIS_FREEZE_MS) return [];
+  if (elapsed >= EXPLOSION_START || !isStasisPulseActive(elapsed)) return [];
   return squad
     .map((member, index) => ({ member, index, ability: getDemoAbility(member, cycle) }))
     .filter((entry) => entry.ability.id === "stasis")
@@ -1181,7 +1200,7 @@ function getDemoRoom(loop, time) {
       y: actor.y,
       role: actor.member.role,
       ability: actor.ability,
-      state: actor.phase === "frozen" ? "frozen" : outcome.state,
+      state: actor.phase === PLAYER_STATES.stasis ? PLAYER_STATES.stasis : outcome.state,
       boostActive: Boolean(actor.boostActive),
       skillCooldown: actor.skillCooldown,
       ready: true,
@@ -1223,7 +1242,7 @@ function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes =
   const repairedNodeIds = new Set(actorRoutes.flatMap((entry) => entry.route.repairedNodeIds || []));
 
   return visibleNodes.map((node, index) => {
-    const claimant = activeActors.find((actor) => actor.phase !== "frozen" && actor.activeNode?.id === node.id);
+    const claimant = activeActors.find((actor) => canSkillClaimNode(actor, node));
     const routeClaimant = actorRoutes.find((entry) => entry.member.id === claimant?.member?.id || entry.member.id === claimant?.id);
     const nodeSpawnedAt = Math.max(0, (index - DEMO_INITIAL_NODE_COUNT) * DEMO_NODE_SPAWN_MS);
     const repaired = repairedNodeIds.has(node.id);
@@ -1240,16 +1259,6 @@ function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes =
       negative: node.value < 0,
     };
   });
-}
-
-function demoActorCanClaimNode(actor, node) {
-  if (actor.phase !== "repair") return false;
-  const nodeHalf = (node.size || 8) / 2;
-  const actorHalfWidth = 7;
-  const actorHalfHeight = 10;
-  const touchesNode = Math.abs(actor.x - node.x) <= nodeHalf + actorHalfWidth && Math.abs(actor.y - node.y) <= nodeHalf + actorHalfHeight;
-  if (touchesNode) return true;
-  return actor.ability?.id === "magnet" && Math.hypot(actor.x - node.x, actor.y - node.y) <= 42;
 }
 
 function getDemoSummary(loop) {
@@ -1282,21 +1291,21 @@ function getDemoSkillStats(loop, actors = null) {
     const ability = getDemoAbility(member, loop.cycle);
     if (activeAbilityIds && !activeAbilityIds.has(ability.id)) continue;
     if (ability.id === "boost") {
-      stats.boost.count += countDemoMovingWindows(member, index, loop.cycle, elapsed, getDemoBoostIntervalMs(), DEMO_BOOST_ACTIVE_MS);
+      stats.boost.count += countDemoMovingWindows(member, index, loop.cycle, elapsed, getBoostIntervalMs(), SKILL_CONFIG.boost.activeMs);
     } else if (ability.id === "warp") {
-      stats.warp.count += countDemoMovingWindows(member, index, loop.cycle, elapsed, 1800, 320);
+      stats.warp.count += countDemoMovingWindows(member, index, loop.cycle, elapsed, SKILL_CONFIG.warp.cooldownMs, SKILL_CONFIG.warp.activeMs);
     } else if (ability.id === "magnet") {
       const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, elapsed));
       stats.magnet.count += demoNodes.filter((node) => repairedIds.has(node.id)).length;
     } else if (ability.id === "greed") {
       const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, elapsed));
-      stats.greed.count += demoNodes.filter((node) => repairedIds.has(node.id) && (node.bonus || Math.abs(node.value) >= 6)).length;
+      stats.greed.count += demoNodes.filter((node) => repairedIds.has(node.id) && isHighValueNode(node)).length;
     }
   }
 
-  const pulseCount = Math.max(0, Math.floor(elapsed / DEMO_STASIS_COOLDOWN_MS) + (elapsed > 0 ? 1 : 0));
+  const pulseCount = Math.max(0, Math.floor(elapsed / SKILL_CONFIG.stasis.cooldownMs) + (elapsed > 0 ? 1 : 0));
   for (let pulse = 0; pulse < pulseCount; pulse += 1) {
-    const pulseElapsed = Math.min(elapsed, pulse * DEMO_STASIS_COOLDOWN_MS);
+    const pulseElapsed = Math.min(elapsed, pulse * SKILL_CONFIG.stasis.cooldownMs);
     const sources = getDemoStasisPulseSources(pulseElapsed, loop.cycle);
     for (const source of sources) {
       for (const [index, member] of squad.entries()) {
@@ -1304,7 +1313,7 @@ function getDemoSkillStats(loop, actors = null) {
         if (activeAbilityIds && !activeAbilityIds.has(ability.id)) continue;
         if (ability.id === "stasis") continue;
         const position = getDemoPlayPosition(member, index, loop.cycle, pulseElapsed);
-        if (Math.hypot(source.x - position.x, source.y - position.y) <= DEMO_STASIS_RADIUS) {
+        if (isPointInStasis(position, [source])) {
           stats.stasis.count += 1;
         }
       }
@@ -3133,7 +3142,7 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
     return;
   }
 
-  if (actor.phase === "frozen") {
+  if (actor.phase === PLAYER_STATES.stasis) {
     ctx.globalAlpha = 0.74;
     px(x - 15, y - 35, 30, 30, "rgba(112, 168, 255, 0.38)");
     px(x - 17, y - 37, 34, 3, style.scene.glow);
@@ -3154,7 +3163,7 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
 
   if (actor.ability?.id === "magnet" && actor.phase === "repair") {
     ctx.globalAlpha = 0.16 + Math.sin(time / 240) * 0.05;
-    drawPixelCircle(x, y - 11, 42, actor.ability.color);
+    drawPixelCircle(x, y - 11, SKILL_CONFIG.magnet.claimRadius, actor.ability.color);
     ctx.globalAlpha = 0.9;
     px(x - 17, y - 31, 4, 9, actor.ability.color);
     px(x + 13, y - 31, 4, 9, actor.ability.color);
@@ -3175,8 +3184,8 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
     px(x + 4, y - 34, 3, 7, actor.ability.color);
     ctx.globalAlpha = 1;
   } else if (actor.stasisPulse) {
-    const wave = (time % DEMO_STASIS_COOLDOWN_MS) / DEMO_STASIS_PULSE_MS;
-    const radius = Math.floor(DEMO_STASIS_RADIUS * clamp(wave, 0, 1));
+    const wave = (time % SKILL_CONFIG.stasis.cooldownMs) / SKILL_CONFIG.stasis.pulseMs;
+    const radius = Math.floor(SKILL_CONFIG.stasis.radius * clamp(wave, 0, 1));
     ctx.globalAlpha = 0.26;
     drawPixelCircle(x, y - 14, radius, actor.ability.color, actor.ability.accent);
     ctx.globalAlpha = 0.72;
@@ -3568,7 +3577,7 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
       state: player.state,
       roundScore: player.roundScore,
     })),
-    frozenCount: players.filter((player) => player.state === "frozen").length,
+    frozenCount: players.filter((player) => player.state === PLAYER_STATES.stasis).length,
     skillStats: getDemoSkillStats(loop, Object.values(room.players || {}).map((player) => ({ ability: player.ability }))),
     audioCueCounts: { ...audioState.demoAbilityCueCounts },
     demoOnlyAbilityIds: [...DEMO_ONLY_ABILITY_IDS],

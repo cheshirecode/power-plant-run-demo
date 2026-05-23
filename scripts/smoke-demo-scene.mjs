@@ -25,13 +25,16 @@ for (const id of demoOnlyIds) {
 }
 
 const opening = debug.getSnapshotAt(0, 0);
-assert(opening.nodeCount === 20, `expected 20 initial demo nodes, got ${opening.nodeCount}`);
+assert(opening.nodeCount === 40, `expected 40 initial demo nodes, got ${opening.nodeCount}`);
 assert(opening.playerCount === 8, `expected 8 demo players, got ${opening.playerCount}`);
 assert(opening.playerAbilities.every((id) => demoOnlyIds.has(id)), "demo player had a non-demo ability");
 
 const firstTargets = opening.routePlans.map((plan) => plan.targets[0]).filter(Boolean);
 assert(new Set(firstTargets).size >= Math.min(6, firstTargets.length), "route planner bunched too many first targets");
 assertNodeValueRules(opening.nodes, 128, "demo opening");
+
+const firstSpawnWave = debug.getSnapshotAt(3_000, 3_000);
+assert(firstSpawnWave.nodeCount === 52, `expected 12 nodes to spawn at first demo wave, got ${firstSpawnWave.nodeCount - opening.nodeCount}`);
 
 const repairSamples = [];
 for (let elapsed = 1_000; elapsed < timings.explosionStart; elapsed += 500) {
