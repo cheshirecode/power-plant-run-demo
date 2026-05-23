@@ -198,96 +198,62 @@ const EXPLOSION_START = 7200;
 const ESCAPE_START = 8350;
 const REBUILD_START = 12850;
 const REBUILD_END = 15800;
+const DEMO_REPAIR_DURATION = EXPLOSION_START;
+const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
+const DEMO_PATH_POINTS = [
+  { x: 0, y: 354 },
+  { x: 118, y: 310 },
+  { x: 248, y: 260 },
+  { x: WORLD_CENTER.x - 34, y: WORLD_CENTER.y + 38 },
+  { x: WORLD_CENTER.x + 70, y: WORLD_CENTER.y + 28 },
+  { x: 620, y: 300 },
+  { x: VIEW.width, y: 346 },
+];
+const demoNodes = [
+  { id: "dn1", x: 76, y: 338, value: 2.4, size: 8, holdMs: 1200 },
+  { id: "dn2", x: 126, y: 94, value: -3.2, size: 8, holdMs: 1600 },
+  { id: "dn3", x: 238, y: 354, value: 4.8, size: 9, holdMs: 2400 },
+  { id: "dn4", x: 306, y: 132, value: 6.1, size: 10, holdMs: 3000, bonus: true },
+  { id: "dn5", x: 458, y: 302, value: -5.4, size: 10, holdMs: 2700, bonus: true },
+  { id: "dn6", x: 596, y: 108, value: 3.6, size: 8, holdMs: 1800 },
+  { id: "dn7", x: 690, y: 348, value: 7.9, size: 10, holdMs: 3300, bonus: true },
+];
+const demoAbilities = [
+  { id: "boost", label: "BOOST", name: "Overclock Boots", color: "#70a8ff" },
+  { id: "magnet", label: "MAG", name: "Magnet Gloves", color: "#57d56c" },
+  { id: "stasis", label: "FREEZE", name: "Stasis Popper", color: "#9fdfff" },
+  { id: "blink", label: "BLINK", name: "Smoke Dash", color: "#d5983b" },
+  { id: "greed", label: "GREED", name: "Greedy Wrench", color: "#ff6b28" },
+];
 
 const squad = [
   {
     id: "lead",
     gender: "male",
     role: "rifleman",
-    enterStart: 0,
-    enterEnd: 5600,
-    exitEnd: 11600,
-    enterPath: [
-      { x: 42, y: 178 },
-      { x: 83, y: 165 },
-      { x: 126, y: 148 },
-      { x: 164, y: 135 },
-      { x: 190, y: 128 },
-      { x: 206, y: 139 },
-    ],
-    exitPath: [
-      { x: 206, y: 139 },
-      { x: 178, y: 147 },
-      { x: 130, y: 158 },
-      { x: 72, y: 181 },
-      { x: 28, y: 202 },
-    ],
+    spawn: { x: 44, y: 372 },
+    escape: { x: 28, y: 202 },
   },
   {
     id: "north",
     gender: "male",
     role: "scout",
-    enterStart: 650,
-    enterEnd: 6150,
-    exitEnd: 11950,
-    enterPath: [
-      { x: 82, y: 30 },
-      { x: 112, y: 55 },
-      { x: 145, y: 84 },
-      { x: 178, y: 113 },
-      { x: 202, y: 137 },
-    ],
-    exitPath: [
-      { x: 202, y: 137 },
-      { x: 174, y: 107 },
-      { x: 136, y: 76 },
-      { x: 94, y: 46 },
-      { x: 54, y: 22 },
-    ],
+    spawn: { x: 56, y: 58 },
+    escape: { x: 54, y: 22 },
   },
   {
     id: "east",
     gender: "male",
     role: "heavy",
-    enterStart: 1050,
-    enterEnd: 6500,
-    exitEnd: 12350,
-    enterPath: [
-      { x: 360, y: 152 },
-      { x: 322, y: 148 },
-      { x: 282, y: 143 },
-      { x: 238, y: 138 },
-      { x: 204, y: 139 },
-    ],
-    exitPath: [
-      { x: 204, y: 139 },
-      { x: 244, y: 146 },
-      { x: 290, y: 154 },
-      { x: 334, y: 170 },
-      { x: 374, y: 190 },
-    ],
+    spawn: { x: 728, y: 144 },
+    escape: { x: 740, y: 202 },
   },
   {
     id: "south",
     gender: "female",
     role: "engineer",
-    enterStart: 1450,
-    enterEnd: 6900,
-    exitEnd: 12650,
-    enterPath: [
-      { x: 222, y: 206 },
-      { x: 218, y: 184 },
-      { x: 214, y: 164 },
-      { x: 208, y: 148 },
-      { x: 202, y: 139 },
-    ],
-    exitPath: [
-      { x: 202, y: 139 },
-      { x: 218, y: 158 },
-      { x: 234, y: 178 },
-      { x: 252, y: 199 },
-      { x: 268, y: 214 },
-    ],
+    spawn: { x: 620, y: 410 },
+    escape: { x: 680, y: 424 },
   },
 ];
 
@@ -536,12 +502,12 @@ function updateDemoAudio(style, loop, time) {
     return;
   }
 
-  const actors = squad.map((member, index) => getSquadMemberState(member, index, loop.elapsed, time)).filter(Boolean);
-  const movingActors = actors.filter((actor) => (actor.phase === "enter" && actor.fade > 0.16) || actor.phase === "escape");
+  const actors = squad.map((member, index) => getDemoActorState(member, index, loop, time)).filter(Boolean);
+  const movingActors = actors.filter((actor) => actor.phase === "repair" || actor.phase === "escape");
 
   if (movingActors.length > 0 && time >= audioState.nextStepAt) {
     const escaping = movingActors.some((actor) => actor.phase === "escape");
-    playFootstepSound(movingActors.length, escaping ? "escape" : "enter");
+    playFootstepSound(movingActors.length, escaping ? "escape" : "repair");
     audioState.nextStepAt = time + (escaping ? 108 : 145) - Math.min(32, movingActors.length * 6);
   }
 
@@ -577,6 +543,134 @@ function getLoopState(totalElapsed) {
   };
 }
 
+function getDemoCountdownMs(loop) {
+  if (loop.elapsed >= EXPLOSION_START) return 0;
+  return Math.max(0, DEMO_REPAIR_DURATION - loop.elapsed);
+}
+
+function getDemoCountdownLabel(loop) {
+  return (getDemoCountdownMs(loop) / 1000).toFixed(2);
+}
+
+function getDemoAbility(member, cycle) {
+  const index = Math.floor(hash2d(cycle + 1, member.id.length, member.role.length) * demoAbilities.length);
+  return demoAbilities[Math.min(demoAbilities.length - 1, index)];
+}
+
+function getDemoNodePlan(member, index, cycle) {
+  const ability = getDemoAbility(member, cycle);
+  if (ability.id === "greed") {
+    return [...demoNodes].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 3);
+  }
+
+  const start = Math.floor(hash2d(index + 3, cycle + 7, member.id.length) * demoNodes.length);
+  const stride = 2 + (index % 3);
+  return [0, 1, 2].map((offset) => demoNodes[(start + offset * stride) % demoNodes.length]);
+}
+
+function getDemoActorState(member, index, loop, time) {
+  const ability = getDemoAbility(member, loop.cycle);
+  const freezeActive = isDemoStasisPulseActive(loop.elapsed, loop.cycle);
+  const frozen = freezeActive && ability.id !== "stasis" && loop.elapsed < EXPLOSION_START;
+
+  if (loop.elapsed < EXPLOSION_START) {
+    const speed = ability.id === "boost" ? 1.28 : ability.id === "blink" ? 1.12 : 1;
+    const blinkHop = ability.id === "blink" && loop.elapsed % 1800 < 220 ? 0.045 : 0;
+    const progress = clamp((loop.elapsed * speed - index * 340) / (EXPLOSION_START - 900) + blinkHop, 0, 1);
+    const targets = getDemoNodePlan(member, index, loop.cycle);
+    const points = [member.spawn, ...targets, { x: WORLD_CENTER.x + (index - 1.5) * 22, y: WORLD_CENTER.y + 38 + (index % 2) * 10 }];
+    const position = getPointOnPath(points, frozen ? Math.max(0, progress - 0.035) : progress);
+    return {
+      ...position,
+      member,
+      ability,
+      phase: frozen ? "frozen" : "repair",
+      stasisPulse: freezeActive && ability.id === "stasis",
+      progress,
+      step: frozen ? 0 : Math.floor((time + index * 80) / (ability.id === "boost" ? 80 : 110)) % 2,
+      fade: 1,
+      dissolve: 0,
+    };
+  }
+
+  const escapeProgress = easeInOut(clamp((loop.elapsed - ESCAPE_START - index * 130) / 2600, 0, 1));
+  if (escapeProgress <= 0 || escapeProgress >= 1) return null;
+  const position = getPointOnPath(
+    [
+      { x: WORLD_CENTER.x + (index - 1.5) * 18, y: WORLD_CENTER.y + 38 },
+      member.escape,
+    ],
+    escapeProgress,
+  );
+  return {
+    ...position,
+    member,
+    ability,
+    phase: "escape",
+    stasisPulse: false,
+    progress: escapeProgress,
+    step: Math.floor((time + index * 80) / 88) % 2,
+    fade: 1,
+    dissolve: 0,
+  };
+}
+
+function isDemoStasisPulseActive(elapsed, cycle) {
+  const hasStasis = squad.some((member) => getDemoAbility(member, cycle).id === "stasis");
+  return hasStasis && elapsed < EXPLOSION_START && elapsed % 3000 < 500;
+}
+
+function getDemoRoom(loop, time) {
+  if (sessionState.room) return sessionState.room;
+  const now = Date.now();
+  const countdownEndsAt = now + getDemoCountdownMs(loop);
+  const actors = squad.map((member, index) => getDemoActorState(member, index, loop, time)).filter(Boolean);
+  const players = {};
+  for (const actor of actors) {
+    players[actor.member.id] = {
+      id: actor.member.id,
+      x: actor.x,
+      y: actor.y,
+      role: actor.member.role,
+      ability: actor.ability,
+      state: actor.phase === "frozen" ? "frozen" : "alive",
+      ready: true,
+      score: 0,
+      roundScore: 0,
+    };
+  }
+
+  const nodes = demoNodes.map((node, index) => {
+    const nearbyMagnet = actors.find(
+      (actor) => actor.ability.id === "magnet" && Math.hypot(actor.x - node.x, actor.y - node.y) <= 72,
+    );
+    const plannedClaimant = actors.find((actor) =>
+      getDemoNodePlan(actor.member, squad.indexOf(actor.member), loop.cycle).some((target) => target.id === node.id),
+    );
+    const claimant = nearbyMagnet || plannedClaimant;
+    const holdTime = claimant?.ability.id === "greed" ? 1600 : claimant?.ability.id === "magnet" ? 1900 : 2200;
+    const claimProgress = claimant ? clamp((loop.elapsed - 900 - index * 420) / holdTime, 0, 1) : 0;
+    return {
+      ...node,
+      seed: node.x * 0.013 + node.y * 0.017 + loop.cycle,
+      repaired: claimProgress >= 1 || loop.elapsed > EXPLOSION_START - 900,
+      claimedBy: claimProgress > 0.15 && claimProgress < 1 && claimant ? claimant.member.id : null,
+      claimEndsAt: claimProgress > 0.15 && claimProgress < 1 ? now + Math.max(0, (1 - claimProgress) * node.holdMs) : null,
+      negative: node.value < 0,
+    };
+  });
+
+  return {
+    phase: loop.elapsed >= EXPLOSION_START ? "explosion" : "repair",
+    countdownEndsAt,
+    phaseStartedAt: now - loop.elapsed,
+    blast: DEMO_BLAST,
+    nodes,
+    players,
+    targetPlayerCount: squad.length,
+  };
+}
+
 function getPointOnPath(points, progress) {
   const clamped = clamp(progress, 0, 1);
   const segment = Math.min(points.length - 2, Math.floor(clamped * (points.length - 1)));
@@ -609,8 +703,8 @@ function setStatus(loop) {
   }
 
   const { elapsed, cycle } = loop;
-  let next = cycle > 0 ? "Squad returning" : "Squad approaching";
-  if (elapsed > 5100) next = "Entering the plant";
+  let next = cycle > 0 ? "Ability scramble" : "Demo repair run";
+  if (elapsed > 2400) next = `Demo detonation in ${getDemoCountdownLabel(loop)}s`;
   if (elapsed >= EXPLOSION_START) next = "Plant detonation";
   if (elapsed >= ESCAPE_START) next = "Squad escaping";
   if (elapsed >= REBUILD_START) next = "Plant rebuilding";
@@ -683,15 +777,18 @@ function updateSessionUi() {
 
 function updateRoomStatus(nextStatus = null) {
   if (nextStatus) {
+    roomStatus.classList.remove("is-hidden");
     roomStatus.textContent = nextStatus;
     return;
   }
 
   if (!sessionState.roomId) {
-    roomStatus.textContent = "Solo";
+    roomStatus.textContent = "";
+    roomStatus.classList.add("is-hidden");
     return;
   }
 
+  roomStatus.classList.remove("is-hidden");
   const players = Object.values(sessionState.room?.players || {});
   const activeCount = players.filter((player) => !player.spectator && !player.bot).length;
   const botCount = players.filter((player) => !player.spectator && player.bot).length;
@@ -1186,44 +1283,25 @@ function drawBackground(style, time) {
 }
 
 function drawPath(colors) {
-  ctx.fillStyle = colors.pathDark;
-  ctx.beginPath();
-  ctx.moveTo(0, 193);
-  ctx.lineTo(55, 170);
-  ctx.lineTo(112, 148);
-  ctx.lineTo(169, 127);
-  ctx.lineTo(205, 118);
-  ctx.lineTo(218, 137);
-  ctx.lineTo(169, 154);
-  ctx.lineTo(104, 174);
-  ctx.lineTo(40, 198);
-  ctx.lineTo(0, 209);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = colors.path;
-  ctx.beginPath();
-  ctx.moveTo(0, 197);
-  ctx.lineTo(57, 174);
-  ctx.lineTo(116, 153);
-  ctx.lineTo(174, 133);
-  ctx.lineTo(202, 126);
-  ctx.lineTo(211, 137);
-  ctx.lineTo(162, 151);
-  ctx.lineTo(103, 170);
-  ctx.lineTo(38, 193);
-  ctx.lineTo(0, 204);
-  ctx.closePath();
-  ctx.fill();
+  drawPixelPath(DEMO_PATH_POINTS, 24, colors.pathDark);
+  drawPixelPath(DEMO_PATH_POINTS, 18, colors.path);
 
   ctx.globalAlpha = 0.34;
   ctx.fillStyle = "#fff8c9";
   for (let i = 0; i < 28; i += 1) {
-    const p = getPointOnPath(squad[0].enterPath, i / 28);
+    const p = getPointOnPath(DEMO_PATH_POINTS, i / 28);
     const jitter = hash2d(i, i + 3) * 10 - 5;
     ctx.fillRect(Math.round(p.x + jitter), Math.round(p.y + 4), 5, 2);
   }
   ctx.globalAlpha = 1;
+}
+
+function drawPixelPath(points, width, color) {
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const start = points[i];
+    const end = points[i + 1];
+    drawPixelLine(start.x, start.y, end.x, end.y, width, color);
+  }
 }
 
 function drawIsometricLines(colors) {
@@ -1883,15 +1961,29 @@ function drawEntrance(style, palette, progress, time) {
   px(x - 9, y + 8, 22, 2, colors.path);
 }
 
-function drawSquad(style, elapsed, time) {
+function drawSquad(style, loop, time) {
   const actors = squad
-    .map((member, index) => getSquadMemberState(member, index, elapsed, time))
+    .map((member, index) => getDemoActorState(member, index, loop, time))
     .filter(Boolean)
     .sort((a, b) => a.y - b.y);
 
   for (const actor of actors) {
     drawPixelSoldierSprite(style, actor, time);
+    drawDemoAbilityTag(style, actor);
   }
+}
+
+function drawDemoAbilityTag(style, actor) {
+  if (!actor.ability) return;
+  const x = Math.round(actor.x);
+  const y = Math.round(actor.y);
+  const label = actor.ability.label;
+  const width = Math.min(46, label.length * 5 + 6);
+  px(x - Math.floor(width / 2), y - 31, width, 8, "rgba(0, 0, 0, 0.76)");
+  px(x - Math.floor(width / 2), y - 31, width, 1, actor.ability.color);
+  ctx.fillStyle = style.css.text;
+  ctx.font = "6px monospace";
+  ctx.fillText(label, x - Math.floor(width / 2) + 3, y - 25);
 }
 
 function drawRoomPlayers(style) {
@@ -1938,8 +2030,7 @@ function drawPlayerArrow(style, x, y, ready) {
   ctx.globalAlpha = 1;
 }
 
-function drawRoomObjectives(style, time) {
-  const room = sessionState.room;
+function drawRoomObjectives(style, time, room = sessionState.room) {
   if (!room) return;
 
   if ((room.phase === "repair" || room.phase === "explosion") && room.blast) {
@@ -1984,8 +2075,7 @@ function drawRoomObjectives(style, time) {
 
 }
 
-function drawClaimTimers(style) {
-  const room = sessionState.room;
+function drawClaimTimers(style, room = sessionState.room) {
   if (!room || room.phase !== "repair") return;
 
   for (const node of room.nodes || []) {
@@ -2004,8 +2094,7 @@ function drawClaimTimers(style) {
   }
 }
 
-function drawBuildingCountdown(style, time) {
-  const room = sessionState.room;
+function drawBuildingCountdown(style, time, room = sessionState.room) {
   if (!room || room.phase !== "repair") return;
 
   const seconds = getCountdownMs() / 1000;
@@ -2037,6 +2126,24 @@ function drawRoomHud(style) {
   ctx.fillText(`TIME ${getCountdownLabel()}s`, 14, 18);
   ctx.fillText(`ROUND ${roundLabel}`, 14, 28);
   ctx.fillText(`TOTAL ${totalLabel}`, 14, 38);
+}
+
+function drawDemoHud(style, room, loop) {
+  if (!room || room.phase !== "repair") return;
+  px(8, 8, 224, 64, "rgba(0, 0, 0, 0.62)");
+  px(8, 8, 224, 3, style.scene.accent);
+  ctx.fillStyle = style.css.text;
+  ctx.font = "7px monospace";
+  ctx.fillText(`DEMO RUN ${getDemoCountdownLabel(loop)}s`, 14, 20);
+  ctx.font = "6px monospace";
+  for (let i = 0; i < squad.length; i += 1) {
+    const member = squad[i];
+    const ability = getDemoAbility(member, loop.cycle);
+    const y = 34 + i * 8;
+    px(14, y - 5, 5, 5, ability.color);
+    ctx.fillStyle = style.css.text;
+    ctx.fillText(`${member.id.toUpperCase()} ${ability.name}`, 23, y);
+  }
 }
 
 function drawRoundSummary(style, summary, options = {}) {
@@ -2129,44 +2236,6 @@ function getRoomVisualLoop(fallbackLoop) {
   };
 }
 
-function getSquadMemberState(member, index, elapsed, time) {
-  const escapeStart = ESCAPE_START + index * 140;
-
-  if (elapsed < member.enterStart) return null;
-
-  if (elapsed <= member.enterEnd) {
-    const progress = easeInOut(clamp((elapsed - member.enterStart) / (member.enterEnd - member.enterStart), 0, 1));
-    const position = getPointOnPath(member.enterPath, progress);
-    return {
-      ...position,
-      member,
-      phase: "enter",
-      progress,
-      step: Math.floor((time + index * 55) / 120) % 2,
-      fade: progress > 0.82 ? 1 - clamp((progress - 0.82) / 0.18, 0, 1) * 0.9 : 1,
-      dissolve: clamp((progress - 0.78) / 0.2, 0, 1),
-    };
-  }
-
-  if (elapsed < escapeStart) return null;
-
-  if (elapsed <= member.exitEnd) {
-    const progress = easeInOut(clamp((elapsed - escapeStart) / (member.exitEnd - escapeStart), 0, 1));
-    const position = getPointOnPath(member.exitPath, progress);
-    return {
-      ...position,
-      member,
-      phase: "escape",
-      progress,
-      step: Math.floor((time + index * 80) / 95) % 2,
-      fade: 1,
-      dissolve: 0,
-    };
-  }
-
-  return null;
-}
-
 function drawPixelSoldierSprite(style, actor, time) {
   const x = Math.round(actor.x);
   const y = Math.round(actor.y + (actor.step === 0 ? 0 : -1));
@@ -2199,6 +2268,38 @@ function drawPixelSoldierSprite(style, actor, time) {
 
 function drawCharacterMotionDetails(style, actor, x, y, time) {
   const colors = getCharacterColors(style, actor.member);
+  if (actor.phase === "frozen") {
+    ctx.globalAlpha = 0.68;
+    px(x - 12, y - 31, 24, 23, "rgba(112, 168, 255, 0.42)");
+    px(x - 15, y - 22, 4, 4, style.scene.glow);
+    px(x + 12, y - 28, 3, 3, style.css.text);
+    ctx.globalAlpha = 1;
+  }
+
+  if (actor.ability?.id === "magnet" && actor.phase === "repair") {
+    ctx.globalAlpha = 0.18 + Math.sin(time / 260) * 0.06;
+    drawPixelCircle(x, y - 11, 28, actor.ability.color);
+    ctx.globalAlpha = 1;
+  } else if (actor.ability?.id === "boost" && actor.phase === "repair") {
+    ctx.globalAlpha = 0.55;
+    px(x - 18, y - 8, 9, 2, style.scene.glow);
+    px(x - 24, y - 5, 12, 2, style.scene.accent);
+    ctx.globalAlpha = 1;
+  } else if (actor.stasisPulse) {
+    ctx.globalAlpha = 0.3;
+    drawPixelCircle(x, y - 14, 34, actor.ability.color);
+    ctx.globalAlpha = 1;
+  } else if (actor.ability?.id === "blink" && actor.phase === "repair") {
+    ctx.globalAlpha = 0.42;
+    px(x - 20, y - 20, 4, 4, "#8a8977");
+    px(x - 25, y - 16, 3, 3, "#bca982");
+    ctx.globalAlpha = 1;
+  } else if (actor.ability?.id === "greed" && actor.phase === "repair") {
+    ctx.globalAlpha = 0.5;
+    px(x + 12, y - 28, 6, 6, "#ff6b28");
+    px(x + 14, y - 26, 2, 2, style.css.text);
+    ctx.globalAlpha = 1;
+  }
 
   if (actor.member.role === "scout") {
     const blink = Math.sin(time / 90) > 0 ? colors.glow : colors.armorLight;
@@ -2473,6 +2574,7 @@ function render(now) {
   const style = styles[activeStyle];
   const elapsed = gameStarted ? now - startedAt : 0;
   const loop = getRoomVisualLoop(getLoopState(elapsed));
+  const demoRoom = sessionState.room ? null : getDemoRoom(loop, now);
   const plantProgress = clamp(loop.elapsed / 7200, 0, 1);
 
   if (gameStarted && sessionState.room?.phase !== "end") {
@@ -2495,14 +2597,16 @@ function render(now) {
   drawBackground(style, now);
   drawPlant(style, now, plantProgress, loop);
   drawCenteredPlant(() => drawExplosion(style, loop.elapsed, now));
-  drawRoomObjectives(style, now);
-  drawBuildingCountdown(style, now);
+  drawRoomObjectives(style, now, demoRoom || sessionState.room);
+  drawBuildingCountdown(style, now, demoRoom || sessionState.room);
   if (sessionState.room) {
     drawRoomPlayers(style);
     drawClaimTimers(style);
     drawRoomHud(style);
   } else {
-    drawCenteredPlant(() => drawSquad(style, loop.elapsed, now));
+    drawSquad(style, loop, now);
+    drawClaimTimers(style, demoRoom);
+    drawDemoHud(style, demoRoom, loop);
   }
   drawVignette(style);
 
