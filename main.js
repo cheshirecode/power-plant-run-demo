@@ -193,12 +193,15 @@ const plantPalettes = {
   },
 };
 
-const LOOP_DURATION = 16600;
-const EXPLOSION_START = 7200;
-const ESCAPE_START = 8350;
-const REBUILD_START = 12850;
-const REBUILD_END = 15800;
-const DEMO_REPAIR_DURATION = EXPLOSION_START;
+const LOOP_DURATION = 52000;
+const EXPLOSION_START = 30000;
+const ESCAPE_START = 31800;
+const REBUILD_START = 42000;
+const REBUILD_END = 50000;
+const DEMO_TIME_SCALE = 0.5;
+const DEMO_REPAIR_DURATION = 30000;
+const DEMO_NODE_SPAWN_MS = 3000;
+const DEMO_INITIAL_NODE_COUNT = 3;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_PATH_POINTS = [
   { x: 0, y: 354 },
@@ -217,6 +220,11 @@ const demoNodes = [
   { id: "dn5", x: 458, y: 302, value: -5.4, size: 10, holdMs: 2700, bonus: true },
   { id: "dn6", x: 596, y: 108, value: 3.6, size: 8, holdMs: 1800 },
   { id: "dn7", x: 690, y: 348, value: 7.9, size: 10, holdMs: 3300, bonus: true },
+  { id: "dn8", x: 180, y: 228, value: -2.8, size: 8, holdMs: 1400 },
+  { id: "dn9", x: 384, y: 96, value: 5.5, size: 9, holdMs: 2600 },
+  { id: "dn10", x: 536, y: 382, value: 4.1, size: 9, holdMs: 2100 },
+  { id: "dn11", x: 646, y: 234, value: -6.6, size: 10, holdMs: 3000, bonus: true },
+  { id: "dn12", x: 352, y: 358, value: 8.4, size: 10, holdMs: 3400, bonus: true },
 ];
 const demoAbilities = [
   { id: "boost", label: "BOOST", name: "Overclock Boots", color: "#70a8ff" },
@@ -557,15 +565,26 @@ function getDemoAbility(member, cycle) {
   return demoAbilities[Math.min(demoAbilities.length - 1, index)];
 }
 
+function getDemoVisibleNodes(cycle, elapsed) {
+  const spawnedCount = Math.min(
+    demoNodes.length,
+    DEMO_INITIAL_NODE_COUNT + Math.floor(Math.max(0, elapsed) / DEMO_NODE_SPAWN_MS),
+  );
+  return [...demoNodes]
+    .sort((a, b) => hash2d(a.x, cycle + 13, a.y) - hash2d(b.x, cycle + 13, b.y))
+    .slice(0, spawnedCount);
+}
+
 function getDemoNodePlan(member, index, cycle) {
   const ability = getDemoAbility(member, cycle);
+  const visibleNodes = getDemoVisibleNodes(cycle, EXPLOSION_START);
   if (ability.id === "greed") {
-    return [...demoNodes].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 3);
+    return [...visibleNodes].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 3);
   }
 
-  const start = Math.floor(hash2d(index + 3, cycle + 7, member.id.length) * demoNodes.length);
+  const start = Math.floor(hash2d(index + 3, cycle + 7, member.id.length) * visibleNodes.length);
   const stride = 2 + (index % 3);
-  return [0, 1, 2].map((offset) => demoNodes[(start + offset * stride) % demoNodes.length]);
+  return [0, 1, 2].map((offset) => visibleNodes[(start + offset * stride) % visibleNodes.length]);
 }
 
 function getDemoActorState(member, index, loop, time) {
@@ -640,7 +659,8 @@ function getDemoRoom(loop, time) {
     };
   }
 
-  const nodes = demoNodes.map((node, index) => {
+  const visibleNodes = getDemoVisibleNodes(loop.cycle, loop.elapsed);
+  const nodes = visibleNodes.map((node, index) => {
     const nearbyMagnet = actors.find(
       (actor) => actor.ability.id === "magnet" && Math.hypot(actor.x - node.x, actor.y - node.y) <= 72,
     );
@@ -652,6 +672,7 @@ function getDemoRoom(loop, time) {
     const claimProgress = claimant ? clamp((loop.elapsed - 900 - index * 420) / holdTime, 0, 1) : 0;
     return {
       ...node,
+      spawnedAt: index * DEMO_NODE_SPAWN_MS,
       seed: node.x * 0.013 + node.y * 0.017 + loop.cycle,
       repaired: claimProgress >= 1 || loop.elapsed > EXPLOSION_START - 900,
       claimedBy: claimProgress > 0.15 && claimProgress < 1 && claimant ? claimant.member.id : null,
@@ -2050,6 +2071,11 @@ function drawRoomObjectives(style, time, room = sessionState.room) {
       const edge = node.repaired ? style.scene.groundDark : isClaimed ? style.css.text : isNegative ? "#5b1711" : "#153119";
       const size = node.repaired ? 6 : node.size || (isRich ? 10 : 8);
       const half = Math.floor(size / 2);
+      const spawnAge = room.phaseStartedAt && node.spawnedAt !== undefined ? Date.now() - (room.phaseStartedAt + node.spawnedAt) : 1000;
+      if (spawnAge >= 0 && spawnAge < 900) {
+        ctx.globalAlpha = 0.28 * (1 - spawnAge / 900);
+        drawPixelCircle(node.x, node.y, 18 + Math.floor(spawnAge / 90), isNegative ? "#ff6b28" : style.scene.glow);
+      }
       drawNodeSmoke(style, node, time, isNegative, isRich);
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
       px(node.x - half - 1, node.y - half - 1, size + 2, size + 2, edge);
@@ -2572,7 +2598,8 @@ function drawVignette(style) {
 
 function render(now) {
   const style = styles[activeStyle];
-  const elapsed = gameStarted ? now - startedAt : 0;
+  const rawElapsed = gameStarted ? now - startedAt : 0;
+  const elapsed = sessionState.room ? rawElapsed : rawElapsed * DEMO_TIME_SCALE;
   const loop = getRoomVisualLoop(getLoopState(elapsed));
   const demoRoom = sessionState.room ? null : getDemoRoom(loop, now);
   const plantProgress = clamp(loop.elapsed / 7200, 0, 1);
