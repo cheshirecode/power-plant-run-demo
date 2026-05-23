@@ -203,6 +203,7 @@ const DEMO_REPAIR_DURATION = 60000;
 const DEMO_NODE_SPAWN_MS = 2000;
 const DEMO_INITIAL_NODE_COUNT = 3;
 const DEMO_RUNNER_SPEED = 1.45;
+const DEMO_ESCAPE_THRESHOLD_MS = 9000;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_SUMMARY_START = EXPLOSION_START + 1400;
 const DEMO_VORTEX_START = REBUILD_END - 1800;
@@ -581,19 +582,64 @@ function getDemoVisibleNodes(cycle, elapsed) {
 function getDemoNodePlan(member, index, cycle) {
   const ability = getDemoAbility(member, cycle);
   const visibleNodes = getDemoVisibleNodes(cycle, EXPLOSION_START);
+  const spawn = member.spawn;
+  const byPressure = (a, b) => a.value - b.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
+  const byRiches = (a, b) => Math.abs(b.value) - Math.abs(a.value) || Math.hypot(a.x - DEMO_BLAST.x, a.y - DEMO_BLAST.y) - Math.hypot(b.x - DEMO_BLAST.x, b.y - DEMO_BLAST.y);
+  const byPositive = (a, b) => b.value - a.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
+
   if (ability.id === "greed") {
-    return [...visibleNodes].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 3);
+    return [...visibleNodes].sort(byRiches).slice(0, 5);
+  }
+  if (ability.id === "stasis") {
+    return [...visibleNodes].sort(byPressure).slice(0, 5);
+  }
+  if (ability.id === "boost") {
+    return [...visibleNodes].filter((node) => node.value > 0).sort(byPositive).slice(0, 5);
+  }
+  if (ability.id === "magnet") {
+    return [...visibleNodes]
+      .sort((a, b) => Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y))
+      .slice(0, 5);
   }
 
   const start = Math.floor(hash2d(index + 3, cycle + 7, member.id.length) * visibleNodes.length);
   const stride = 2 + (index % 3);
-  return [0, 1, 2].map((offset) => visibleNodes[(start + offset * stride) % visibleNodes.length]);
+  return [0, 1, 2, 3, 4].map((offset) => visibleNodes[(start + offset * stride) % visibleNodes.length]).filter(Boolean);
+}
+
+function getDemoEscapeThresholdMs(ability) {
+  if (ability.id === "greed") return DEMO_ESCAPE_THRESHOLD_MS * 0.58;
+  if (ability.id === "stasis") return DEMO_ESCAPE_THRESHOLD_MS * 0.72;
+  if (ability.id === "boost") return DEMO_ESCAPE_THRESHOLD_MS * 0.78;
+  if (ability.id === "blink") return DEMO_ESCAPE_THRESHOLD_MS * 0.84;
+  return DEMO_ESCAPE_THRESHOLD_MS;
+}
+
+function getDemoPathSpeed(ability) {
+  const abilitySpeed = ability.id === "boost" ? 1.32 : ability.id === "blink" ? 1.16 : 1;
+  return DEMO_RUNNER_SPEED * abilitySpeed;
+}
+
+function getDemoPlayPosition(member, index, cycle, elapsed) {
+  const ability = getDemoAbility(member, cycle);
+  const escapeThreshold = getDemoEscapeThresholdMs(ability);
+  const escapeStart = Math.max(0, EXPLOSION_START - escapeThreshold);
+  const targets = getDemoNodePlan(member, index, cycle);
+  const points = [member.spawn, ...targets];
+
+  if (elapsed >= escapeStart) {
+    const start = getDemoPlayPosition(member, index, cycle, escapeStart - 1);
+    const progress = easeInOut(clamp((elapsed - escapeStart) / escapeThreshold, 0, 1));
+    return getPointOnPath([start, member.escape], progress);
+  }
+
+  const speed = getDemoPathSpeed(ability);
+  const progress = clamp((elapsed * speed - index * 340) / Math.max(1, escapeStart - 900), 0, 1);
+  return getPointOnPath(points.length > 1 ? points : [member.spawn, member.escape], progress);
 }
 
 function getDemoDetonationPosition(member, index, cycle) {
-  const targets = getDemoNodePlan(member, index, cycle);
-  const points = [member.spawn, ...targets, { x: WORLD_CENTER.x + (index - 1.5) * 22, y: WORLD_CENTER.y + 38 + (index % 2) * 10 }];
-  return getPointOnPath(points, 1);
+  return getDemoPlayPosition(member, index, cycle, EXPLOSION_START - 1);
 }
 
 function getDemoRoundScore(member, index, loop) {
@@ -622,20 +668,16 @@ function getDemoActorState(member, index, loop, time) {
   const frozen = freezeActive && ability.id !== "stasis" && loop.elapsed < EXPLOSION_START;
 
   if (loop.elapsed < EXPLOSION_START) {
-    const abilitySpeed = ability.id === "boost" ? 1.32 : ability.id === "blink" ? 1.16 : 1;
-    const speed = DEMO_RUNNER_SPEED * abilitySpeed;
     const blinkHop = ability.id === "blink" && loop.elapsed % 1800 < 220 ? 0.045 : 0;
-    const progress = clamp((loop.elapsed * speed - index * 340) / (EXPLOSION_START - 900) + blinkHop, 0, 1);
-    const targets = getDemoNodePlan(member, index, loop.cycle);
-    const points = [member.spawn, ...targets, { x: WORLD_CENTER.x + (index - 1.5) * 22, y: WORLD_CENTER.y + 38 + (index % 2) * 10 }];
-    const position = getPointOnPath(points, frozen ? Math.max(0, progress - 0.035) : progress);
+    const adjustedElapsed = Math.max(0, loop.elapsed + blinkHop * 2400 - (frozen ? 850 : 0));
+    const position = getDemoPlayPosition(member, index, loop.cycle, adjustedElapsed);
     return {
       ...position,
       member,
       ability,
       phase: frozen ? "frozen" : "repair",
       stasisPulse: freezeActive && ability.id === "stasis",
-      progress,
+      progress: clamp(loop.elapsed / EXPLOSION_START, 0, 1),
       step: frozen ? 0 : Math.floor((time + index * 80) / (ability.id === "boost" ? 80 : 110)) % 2,
       fade: 1,
       dissolve: 0,
@@ -667,7 +709,7 @@ function getDemoActorState(member, index, loop, time) {
   if (escapeProgress <= 0 || escapeProgress >= 1) return null;
   const position = getPointOnPath(
     [
-      { x: WORLD_CENTER.x + (index - 1.5) * 18, y: WORLD_CENTER.y + 38 },
+      getDemoDetonationPosition(member, index, loop.cycle),
       member.escape,
     ],
     escapeProgress,
