@@ -534,7 +534,7 @@ function setStatus(loop) {
     const room = sessionState.room;
     let next = `Room ${room.phase}`;
     if (room.phase === "repair") next = `Detonation in ${getCountdownSeconds()}s`;
-    if (room.phase === "end") next = "Round summary";
+    if (room.phase === "end") next = "Final scores";
     if (next !== lastStatus) {
       statusText.textContent = next;
       lastStatus = next;
@@ -584,11 +584,12 @@ function updateSessionUi() {
   loginButton.classList.toggle("is-hidden", Boolean(user));
   logoutButton.classList.toggle("is-hidden", !user);
   createRoomButton.disabled = !user;
+  createRoomButton.textContent = sessionState.roomId ? "New" : "Create";
   joinRoomButton.disabled = !user;
   readyButton.disabled =
     !user || isSpectator || sessionState.room?.phase !== "lobby" || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
   copyRoomButton.disabled = !sessionState.roomId;
-  roomSizeInput.disabled = !user || Boolean(sessionState.roomId);
+  roomSizeInput.disabled = !user;
   roomCodeInput.disabled = !user;
   readyButton.classList.toggle("is-active", sessionState.ready);
   readyButton.setAttribute("aria-pressed", String(sessionState.ready));
@@ -649,6 +650,12 @@ async function createRoom() {
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ playerCount: getSelectedRoomSize() }),
     });
+    if (response.status === 401) {
+      sessionState.user = null;
+      updateSessionUi();
+      updateRoomStatus("Sign in first");
+      return;
+    }
     if (!response.ok) throw new Error("room create failed");
     const room = await response.json();
     roomCodeInput.value = room.roomId;
@@ -673,6 +680,7 @@ function connectRoom(roomId) {
   disconnectRoom();
   sessionState.roomId = roomId;
   sessionState.ready = false;
+  sessionState.room = null;
   sessionState.briefingDismissedFor = "";
   sessionState.localPosition = null;
   sessionState.target = null;
@@ -681,22 +689,24 @@ function connectRoom(roomId) {
   updateRoomStatus("Connecting");
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const playerId = encodeURIComponent(sessionState.user.login);
   const targetPlayerCount = getSelectedRoomSize();
-  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/rooms/${roomId}?player=${playerId}&players=${targetPlayerCount}`);
+  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/rooms/${roomId}?players=${targetPlayerCount}`);
   sessionState.socket = socket;
 
   socket.addEventListener("open", () => {
+    if (sessionState.socket !== socket) return;
     updateRoomStatus();
     updateSessionUi();
     updateRoomSheet();
   });
 
   socket.addEventListener("message", (event) => {
+    if (sessionState.socket !== socket) return;
     handleRoomMessage(event.data);
   });
 
   socket.addEventListener("close", () => {
+    if (sessionState.socket !== socket) return;
     sessionState.socket = null;
     sessionState.ready = false;
     updateRoomStatus(sessionState.roomId ? "Disconnected" : "Solo");
@@ -705,14 +715,16 @@ function connectRoom(roomId) {
   });
 
   socket.addEventListener("error", () => {
+    if (sessionState.socket !== socket) return;
     updateRoomStatus("Socket error");
   });
 }
 
 function disconnectRoom() {
   if (sessionState.socket) {
-    sessionState.socket.close();
+    const socket = sessionState.socket;
     sessionState.socket = null;
+    socket.close();
   }
 }
 
@@ -1648,37 +1660,57 @@ function drawBuildingCountdown(style, time) {
 function drawRoomHud(style) {
   const room = sessionState.room;
   if (!room) return;
+  if (room.phase === "end") return;
 
   const local = room.players?.[sessionState.user?.login];
   px(8, 8, 118, 24, "rgba(0, 0, 0, 0.58)");
   ctx.fillStyle = style.css.text;
   ctx.font = "7px monospace";
-  const timeLabel = room.phase === "end" ? "ENDED" : `${getCountdownSeconds()}s`;
   const scoreLabel = local?.spectator ? "WATCH" : local?.score || 0;
-  ctx.fillText(`TIME ${timeLabel}`, 14, 18);
+  ctx.fillText(`TIME ${getCountdownSeconds()}s`, 14, 18);
   ctx.fillText(`SCORE ${scoreLabel}`, 14, 28);
-
-  if (room.phase === "end" && room.summary) {
-    drawRoundSummary(style, room.summary);
-  }
 }
 
-function drawRoundSummary(style, summary) {
-  const panelX = 118;
-  const panelY = 54;
+function drawRoundSummary(style, summary, options = {}) {
+  const panelX = options.x ?? 118;
+  const panelY = options.y ?? 54;
+  const panelWidth = options.width ?? 150;
+  const title = options.title ?? "ROUND SUMMARY";
   const visibleRows = summary.slice(0, 8);
   const panelHeight = Math.max(62, 34 + visibleRows.length * 12);
-  px(panelX, panelY, 150, panelHeight, "rgba(0, 0, 0, 0.72)");
-  px(panelX, panelY, 150, 3, style.scene.accent);
+  px(panelX, panelY, panelWidth, panelHeight, "rgba(0, 0, 0, 0.72)");
+  px(panelX, panelY, panelWidth, 3, style.scene.accent);
   ctx.fillStyle = style.css.text;
   ctx.font = "8px monospace";
-  ctx.fillText("ROUND SUMMARY", panelX + 18, panelY + 18);
+  ctx.fillText(title, panelX + 18, panelY + 18);
   ctx.font = "7px monospace";
   for (let i = 0; i < visibleRows.length; i += 1) {
     const row = visibleRows[i];
-    const label = row.spectator ? "WATCH" : row.caughtInBlast ? "BLAST" : "CLEAR";
+    const label = row.caughtInBlast ? "BLAST" : "CLEAR";
     ctx.fillText(`${row.id.slice(0, 8)} ${row.score} ${label}`, panelX + 12, panelY + 34 + i * 12);
   }
+}
+
+function drawFinalScoreScene(style) {
+  const summary = sessionState.room?.summary || [];
+  px(0, 0, VIEW.width, VIEW.height, style.scene.groundDark);
+  for (let y = 0; y < VIEW.height; y += 12) {
+    for (let x = 0; x < VIEW.width; x += 12) {
+      if (hash2d(x, y, 9) > 0.72) {
+        px(x, y, 6, 6, style.scene.ground);
+      }
+    }
+  }
+
+  ctx.fillStyle = style.css.text;
+  ctx.font = "13px monospace";
+  ctx.fillText("FINAL SCORES", 139, 42);
+  drawRoundSummary(style, summary, {
+    x: 92,
+    y: 62,
+    width: 200,
+    title: "PLAYER SCORES",
+  });
 }
 
 function getRoomVisualLoop(fallbackLoop) {
@@ -2064,6 +2096,12 @@ function render(now) {
     updateRoomPosition(loop, now);
   }
   setStatus(loop);
+  if (sessionState.room?.phase === "end") {
+    drawFinalScoreScene(style);
+    drawVignette(style);
+    requestAnimationFrame(render);
+    return;
+  }
   drawBackground(style, now);
   drawPlant(style, now, plantProgress, loop);
   drawExplosion(style, loop.elapsed, now);

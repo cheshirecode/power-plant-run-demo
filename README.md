@@ -13,7 +13,11 @@ The deployed Worker serves the static demo and exposes the first multiplayer bac
 - Health check: `/api/health`
 - OAuth config check: `/api/auth/config`
 - Room creation: `POST /api/rooms`
-- Room WebSocket: `/ws/rooms/:roomId?player=:playerId`
+- Room WebSocket: `/ws/rooms/:roomId?players=:targetCount`
+
+Room creation and WebSocket joining require the signed GitHub session cookie. The
+server derives the player identity from GitHub OAuth instead of trusting a client
+provided player id.
 
 Local commands:
 

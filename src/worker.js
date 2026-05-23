@@ -45,6 +45,10 @@ export class GameRoom {
 
   async fetch(request) {
     await this.advanceTimedPhase();
+    const player = await getAuthenticatedPlayer(request, this.env);
+    if (!player) {
+      return json({ error: "Sign in required" }, 401);
+    }
 
     if (request.headers.get("Upgrade") !== "websocket") {
       return json({
@@ -59,13 +63,9 @@ export class GameRoom {
       this.roomState.targetPlayerCount = targetPlayerCount;
     }
 
-    const playerId = sanitizePlayerId(url.searchParams.get("player"));
-    if (!playerId) {
-      return json({ error: "Missing or invalid player id" }, 400);
-    }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.acceptPlayer(server, playerId);
+    this.acceptPlayer(server, player);
 
     return new Response(null, {
       status: 101,
@@ -73,13 +73,16 @@ export class GameRoom {
     });
   }
 
-  acceptPlayer(socket, playerId) {
+  acceptPlayer(socket, player) {
     socket.accept();
+    const playerId = player.id;
     this.sessions.set(socket, playerId);
     const existingPlayer = this.roomState.players[playerId];
     const activePlayers = Object.values(this.roomState.players).filter((player) => !player.spectator);
     this.roomState.players[playerId] ||= {
       id: playerId,
+      login: player.login,
+      avatarUrl: player.avatarUrl,
       joinedAt: Date.now(),
       role: existingPlayer?.role || this.nextRole(),
       x: 42,
@@ -106,7 +109,10 @@ export class GameRoom {
 
     const leave = () => {
       this.sessions.delete(socket);
-      delete this.roomState.players[playerId];
+      const hasOtherSession = Array.from(this.sessions.values()).some((sessionPlayerId) => sessionPlayerId === playerId);
+      if (!hasOtherSession) {
+        delete this.roomState.players[playerId];
+      }
       this.broadcastState("player:left");
     };
     socket.addEventListener("close", leave);
@@ -233,11 +239,11 @@ export class GameRoom {
 
   createSummary() {
     this.roomState.summary = Object.values(this.roomState.players)
+      .filter((player) => !player.spectator)
       .map((player) => ({
         id: player.id,
         score: player.score,
         caughtInBlast: Boolean(player.caughtInBlast),
-        spectator: Boolean(player.spectator),
       }))
       .sort((a, b) => b.score - a.score);
   }
@@ -324,6 +330,11 @@ export default {
     }
 
     if (url.pathname === "/api/rooms" && request.method === "POST") {
+      const session = await readSession(request, env);
+      if (!session) {
+        return json({ error: "Sign in required" }, 401);
+      }
+
       let targetPlayerCount = 2;
       try {
         const payload = await request.json();
@@ -469,6 +480,8 @@ async function finishGithubLogin(request, env) {
 }
 
 async function readSession(request, env) {
+  if (!env.GITHUB_CLIENT_SECRET) return null;
+
   const rawSession = getCookie(request, SESSION_COOKIE);
   if (!rawSession) return null;
 
@@ -485,6 +498,19 @@ async function readSession(request, env) {
   } catch {
     return null;
   }
+}
+
+async function getAuthenticatedPlayer(request, env) {
+  const session = await readSession(request, env);
+  const login = session?.user?.login;
+  const id = sanitizePlayerId(login);
+  if (!id) return null;
+
+  return {
+    id,
+    login,
+    avatarUrl: session.user.avatarUrl || "",
+  };
 }
 
 async function signSession(session, env) {
