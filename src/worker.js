@@ -15,6 +15,7 @@ const NODE_BONUS_VALUE_MIN = 7;
 const NODE_BONUS_VALUE_MAX = 9;
 const NODE_BONUS_COUNT_MIN = 3;
 const NODE_BONUS_COUNT_MAX = 4;
+const NODE_NEGATIVE_CHANCE = 0.32;
 const NODE_HOLD_SECONDS_PER_POINT = 1 / 3;
 const NODE_REPAIR_RADIUS_MIN = 18;
 const NODE_REPAIR_RADIUS_MAX = 26;
@@ -345,7 +346,11 @@ export class GameRoom {
     player.roundScore = roundValue((player.roundScore || 0) + node.value);
     this.roomState.score = roundValue(this.roomState.score + node.value);
     this.roomState.countdownEndsAt += Math.round(node.value * 1000);
+    if (this.roomState.countdownEndsAt < Date.now()) {
+      this.roomState.countdownEndsAt = Date.now();
+    }
     await this.scheduleNextRepairAlarm();
+    await this.advanceTimedPhase();
     await this.persistRoomState();
   }
 
@@ -507,6 +512,7 @@ function cloneNodes() {
       ...node,
       repaired: false,
       bonus,
+      negative: value < 0,
       value,
       radius: nodeRadius(value, bonus),
       holdMs: nodeHoldMs(value),
@@ -532,23 +538,29 @@ function assertNodeSpacing(nodes) {
 }
 
 function nodeValue(node, bonus = false) {
-  if (bonus) {
-    return roundValue(NODE_BONUS_VALUE_MIN + Math.random() * (NODE_BONUS_VALUE_MAX - NODE_BONUS_VALUE_MIN));
-  }
+  const sign = Math.random() < NODE_NEGATIVE_CHANCE ? -1 : 1;
+  const magnitude = bonus
+    ? NODE_BONUS_VALUE_MIN + Math.random() * (NODE_BONUS_VALUE_MAX - NODE_BONUS_VALUE_MIN)
+    : regularNodeValue(node);
+  return roundValue(magnitude * sign);
+}
+
+function regularNodeValue(node) {
   const distance = Math.hypot(node.x - BLAST_CENTER.x, node.y - BLAST_CENTER.y);
   const falloff = (distance - NODE_MAX_VALUE_DISTANCE) / (NODE_MIN_VALUE_DISTANCE - NODE_MAX_VALUE_DISTANCE);
   const closeness = 1 - clampNumber(falloff, 0, 1);
-  return roundValue(clampNumber(NODE_VALUE_MIN + closeness * (NODE_VALUE_MAX - NODE_VALUE_MIN), NODE_VALUE_MIN, NODE_VALUE_MAX));
+  return clampNumber(NODE_VALUE_MIN + closeness * (NODE_VALUE_MAX - NODE_VALUE_MIN), NODE_VALUE_MIN, NODE_VALUE_MAX);
 }
 
 function nodeRadius(value, bonus = false) {
   if (bonus) return NODE_REPAIR_RADIUS_MAX;
-  const scale = (value - NODE_VALUE_MIN) / (NODE_VALUE_MAX - NODE_VALUE_MIN);
+  const magnitude = Math.abs(value);
+  const scale = (magnitude - NODE_VALUE_MIN) / (NODE_VALUE_MAX - NODE_VALUE_MIN);
   return Math.round(NODE_REPAIR_RADIUS_MIN + scale * (NODE_REPAIR_RADIUS_MAX - NODE_REPAIR_RADIUS_MIN));
 }
 
 function nodeHoldMs(value) {
-  return Math.round(value * NODE_HOLD_SECONDS_PER_POINT * 1000);
+  return Math.round(Math.abs(value) * NODE_HOLD_SECONDS_PER_POINT * 1000);
 }
 
 function isInsideNode(player, node) {

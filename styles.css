@@ -36,6 +36,7 @@ button {
 
 .demo-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
@@ -283,6 +284,7 @@ h1 {
   box-shadow:
     0 26px 70px var(--shadow),
     inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  contain: layout paint;
 }
 
 .start-gate,
@@ -347,14 +349,87 @@ h1 {
   line-height: 1.3;
 }
 
-.room-sheet-panel ol {
+.briefing-grid {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  margin: 0;
-  padding-left: 22px;
+}
+
+.briefing-card {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+  min-height: 48px;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, #000);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.briefing-card strong,
+.briefing-card span:last-child {
+  grid-column: 2;
+}
+
+.briefing-card strong {
   color: var(--text);
-  font-size: 0.78rem;
-  line-height: 1.35;
+  font-size: 0.66rem;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.briefing-card span:last-child {
+  color: var(--muted);
+  font-size: 0.52rem;
+  line-height: 1.25;
+}
+
+.briefing-icon {
+  grid-row: 1 / span 2;
+  width: 26px;
+  height: 26px;
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.35);
+  image-rendering: pixelated;
+}
+
+.briefing-icon-link {
+  background:
+    linear-gradient(90deg, transparent 0 7px, var(--accent) 7px 19px, transparent 19px),
+    linear-gradient(transparent 0 7px, var(--accent) 7px 19px, transparent 19px),
+    var(--panel-strong);
+}
+
+.briefing-icon-move {
+  background:
+    linear-gradient(135deg, transparent 0 42%, var(--text) 42% 56%, transparent 56%),
+    linear-gradient(90deg, transparent 0 10px, var(--accent-2) 10px 16px, transparent 16px),
+    var(--panel-strong);
+}
+
+.briefing-icon-green {
+  background:
+    radial-gradient(circle, #d9ffd2 0 18%, #57d56c 18% 42%, transparent 43%),
+    #153119;
+}
+
+.briefing-icon-red {
+  background:
+    radial-gradient(circle, #ffe4d9 0 18%, #ff4f36 18% 42%, transparent 43%),
+    #3a1512;
+}
+
+.briefing-icon-blast {
+  background:
+    radial-gradient(circle, transparent 0 31%, #ff6b28 32% 44%, transparent 45%),
+    radial-gradient(circle, rgba(255, 107, 40, 0.35) 0 62%, transparent 63%),
+    var(--panel-strong);
+}
+
+.briefing-icon-ready {
+  background:
+    linear-gradient(90deg, transparent 0 8px, var(--accent) 8px 18px, transparent 18px),
+    linear-gradient(transparent 0 15px, var(--text) 15px 20px, transparent 20px),
+    var(--panel-strong);
 }
 
 .start-button {
@@ -431,6 +506,7 @@ h1 {
 
 #game-canvas {
   width: min(100%, calc((100vh - 150px) * 16 / 9), 1120px);
+  width: min(100%, calc((100dvh - 150px) * 16 / 9), 1120px);
   aspect-ratio: 16 / 9;
   height: auto;
   display: block;
@@ -438,9 +514,15 @@ h1 {
   background: #182012;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+  touch-action: none;
+  user-select: none;
   box-shadow:
     0 18px 42px rgba(0, 0, 0, 0.38),
     inset 0 0 0 2px rgba(255, 255, 255, 0.04);
+}
+
+.landscape-gate {
+  display: none;
 }
 
 @media (max-width: 780px) {
@@ -502,6 +584,95 @@ h1 {
 
   #game-canvas {
     width: 100%;
+  }
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+  .demo-shell {
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .topbar {
+    align-items: start;
+    gap: 8px;
+  }
+
+  h1 {
+    font-size: 1rem;
+  }
+
+  .topbar p {
+    display: none;
+  }
+
+  .controls {
+    gap: 6px;
+  }
+
+  .control-button,
+  .style-button,
+  .replay-button,
+  .room-input,
+  .room-select {
+    min-height: 30px;
+    font-size: 0.62rem;
+  }
+
+  .style-switcher {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .stage-wrap {
+    padding: 6px;
+  }
+
+  #game-canvas {
+    width: min(100%, calc((100dvh - 170px) * 16 / 9));
+  }
+}
+
+@media (max-width: 900px) and (orientation: portrait) {
+  .landscape-gate {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background:
+      repeating-linear-gradient(0deg, rgba(213, 152, 59, 0.08) 0 4px, transparent 4px 8px),
+      rgba(17, 20, 15, 0.96);
+  }
+
+  .landscape-gate > div {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    max-width: 280px;
+    padding: 20px;
+    border: 1px solid var(--accent);
+    background: var(--panel-bg);
+    text-align: center;
+  }
+
+  .landscape-gate strong {
+    font-size: 1.1rem;
+    text-transform: uppercase;
+  }
+
+  .landscape-gate span:last-child {
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .landscape-icon {
+    width: 64px;
+    height: 42px;
+    border: 4px solid var(--accent);
+    box-shadow: inset 0 0 0 5px var(--panel-strong);
   }
 }
 

@@ -93,13 +93,46 @@
               <h2>Room Briefing</h2>
               <p id="room-sheet-status">Waiting for squad</p>
             </div>
-            <ol>
-              <li>Copy the room link and wait for the selected squad size.</li>
-              <li>Click Ready when everyone is in.</li>
-              <li>Move with the mouse and repair every glowing node.</li>
-              <li>Stay outside the blast radius when the countdown ends.</li>
-            </ol>
+            <div class="briefing-grid" aria-label="Gameplay briefing">
+              <div class="briefing-card">
+                <span class="briefing-icon briefing-icon-link" aria-hidden="true"></span>
+                <strong>Gather</strong>
+                <span>Share the room and wait for active slots.</span>
+              </div>
+              <div class="briefing-card">
+                <span class="briefing-icon briefing-icon-move" aria-hidden="true"></span>
+                <strong>Move</strong>
+                <span>Mouse points your runner toward nodes.</span>
+              </div>
+              <div class="briefing-card">
+                <span class="briefing-icon briefing-icon-green" aria-hidden="true"></span>
+                <strong>Green</strong>
+                <span>Hold to score and add countdown time.</span>
+              </div>
+              <div class="briefing-card">
+                <span class="briefing-icon briefing-icon-red" aria-hidden="true"></span>
+                <strong>Red</strong>
+                <span>Hold to score negative and cut time.</span>
+              </div>
+              <div class="briefing-card">
+                <span class="briefing-icon briefing-icon-blast" aria-hidden="true"></span>
+                <strong>Blast</strong>
+                <span>Outside the ring keeps your points.</span>
+              </div>
+              <div class="briefing-card">
+                <span class="briefing-icon briefing-icon-ready" aria-hidden="true"></span>
+                <strong>Ready</strong>
+                <span>All active players ready starts the run.</span>
+              </div>
+            </div>
             <button class="start-button" type="button" id="room-ready-button">Ready</button>
+          </div>
+        </div>
+        <div class="landscape-gate" aria-hidden="true">
+          <div>
+            <span class="landscape-icon"></span>
+            <strong>Rotate</strong>
+            <span>Landscape mode keeps the board readable.</span>
           </div>
         </div>
       </section>

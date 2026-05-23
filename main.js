@@ -296,6 +296,7 @@ const audioState = {
   enabled: false,
   unlocked: false,
   nextStepAt: 0,
+  nextHazardAt: 0,
   explosionCycle: -1,
 };
 const sessionState = {
@@ -480,8 +481,29 @@ function playExplosionSound() {
   }
 }
 
+function playHazardBeep() {
+  const audio = audioState.context;
+  if (!audio || !audioState.unlocked || !audioState.enabled) return;
+
+  const start = audio.currentTime;
+  playSquareTone(880, start, 0.07, 0.08);
+  playSquareTone(440, start + 0.08, 0.06, 0.055);
+}
+
 function updateDemoAudio(style, loop, time) {
   if (!audioState.enabled || !audioState.unlocked || !audioState.context) return;
+
+  if (sessionState.room) {
+    if (sessionState.room.phase === "repair" && getCountdownMs() <= 5000 && time >= audioState.nextHazardAt) {
+      playHazardBeep();
+      audioState.nextHazardAt = time + 620;
+    }
+    if (sessionState.room.phase === "explosion" && audioState.explosionCycle !== sessionState.room.cycle) {
+      playExplosionSound(style);
+      audioState.explosionCycle = sessionState.room.cycle;
+    }
+    return;
+  }
 
   const actors = squad.map((member, index) => getSquadMemberState(member, index, loop.elapsed, time)).filter(Boolean);
   const movingActors = actors.filter((actor) => (actor.phase === "enter" && actor.fade > 0.16) || actor.phase === "escape");
@@ -1016,9 +1038,14 @@ function handleCanvasClick(event) {
   setControlTarget(point);
 }
 
-function handleCanvasPointerMove(event) {
+function handleCanvasPointer(event) {
   if (!sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN || !sessionState.room) return;
   if (getLocalPlayer()?.spectator || sessionState.room.phase !== "repair") return;
+  if (event.pointerType === "mouse" && event.type === "pointermove" && event.buttons === 0) return;
+  event.preventDefault();
+  if (event.type === "pointerdown") {
+    canvas.setPointerCapture?.(event.pointerId);
+  }
   setControlTarget(getCanvasPoint(event));
 }
 
@@ -1806,15 +1833,17 @@ function drawRoomObjectives(style, time) {
 
   if (room.phase === "repair") {
     for (const node of room.nodes || []) {
-      const isRich = node.value >= 10 || node.bonus;
+      const isNegative = node.value < 0;
+      const magnitude = Math.abs(node.value);
+      const isRich = magnitude >= 7 || node.bonus;
       const isClaimed = Boolean(node.claimedBy);
       const pulse = 1 + Math.floor(Math.sin(time / (isRich ? 96 : 130) + node.x) * 2);
-      const color = node.repaired ? style.scene.groundLight : isClaimed ? style.scene.accent : style.scene.glow;
-      const edge = node.repaired ? style.scene.groundDark : node.bonus ? style.css.text : style.scene.accent;
+      const color = node.repaired ? style.scene.groundLight : isNegative ? "#ff4f36" : "#57d56c";
+      const edge = node.repaired ? style.scene.groundDark : isClaimed ? style.css.text : isNegative ? "#5b1711" : "#153119";
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
       drawPixelCircle(node.x, node.y, node.repaired ? 7 : node.radius || (isRich ? 11 : 9) + pulse, color, edge);
       drawPixelCircle(node.x, node.y, node.repaired ? 7 : (isRich ? 11 : 9) + pulse, color, edge);
-      px(node.x - 7, node.y - 7, 14, 14, node.repaired ? style.scene.groundDark : isRich ? style.scene.accent : style.css.strong);
+      px(node.x - 7, node.y - 7, 14, 14, node.repaired ? style.scene.groundDark : isNegative ? "#3a1512" : "#153119");
       px(node.x - 3, node.y - 3, 6, 6, node.repaired ? style.scene.groundLight : style.css.text);
       if (node.bonus && !node.repaired) {
         px(node.x - 2, node.y - 11, 4, 4, style.css.text);
@@ -1824,9 +1853,9 @@ function drawRoomObjectives(style, time) {
       }
       ctx.fillStyle = style.css.text;
       ctx.font = "7px monospace";
-      const label = formatNodeValue(node.value);
-      px(node.x - 13, node.y - 23, 26, 9, "rgba(0, 0, 0, 0.62)");
-      ctx.fillText(label, node.x - 12, node.y - 15);
+      const label = `${node.value > 0 ? "+" : ""}${formatNodeValue(node.value)}`;
+      px(node.x - 15, node.y - 23, 30, 9, "rgba(0, 0, 0, 0.62)");
+      ctx.fillText(label, node.x - 14, node.y - 15);
       ctx.globalAlpha = 1;
     }
   }
@@ -2317,7 +2346,7 @@ function render(now) {
   const loop = getRoomVisualLoop(getLoopState(elapsed));
   const plantProgress = clamp(loop.elapsed / 7200, 0, 1);
 
-  if (gameStarted) {
+  if (gameStarted && sessionState.room?.phase !== "end") {
     updateDemoAudio(style, loop, now);
   }
 
@@ -2374,7 +2403,8 @@ endRoomButton.addEventListener("click", endRoomGame);
 leaveRoomButton.addEventListener("click", leaveRoom);
 copyRoomButton.addEventListener("click", copyRoomLink);
 canvas.addEventListener("click", handleCanvasClick);
-canvas.addEventListener("pointermove", handleCanvasPointerMove);
+canvas.addEventListener("pointerdown", handleCanvasPointer);
+canvas.addEventListener("pointermove", handleCanvasPointer);
 roomCodeInput.addEventListener("input", () => {
   roomCodeInput.value = normalizeRoomId(roomCodeInput.value);
 });
