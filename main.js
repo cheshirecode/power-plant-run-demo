@@ -3,6 +3,16 @@ const ctx = canvas.getContext("2d", { alpha: false });
 const shell = document.querySelector(".demo-shell");
 const statusText = document.querySelector("#run-status");
 const replayButton = document.querySelector("#replay-button");
+const audioButton = document.querySelector("#audio-button");
+const startButton = document.querySelector("#start-button");
+const authStatus = document.querySelector("#auth-status");
+const loginButton = document.querySelector("#login-button");
+const logoutButton = document.querySelector("#logout-button");
+const createRoomButton = document.querySelector("#create-room-button");
+const joinRoomButton = document.querySelector("#join-room-button");
+const readyButton = document.querySelector("#ready-button");
+const roomCodeInput = document.querySelector("#room-code-input");
+const roomStatus = document.querySelector("#room-status");
 const styleButtons = [...document.querySelectorAll(".style-button")];
 
 const VIEW = {
@@ -265,14 +275,24 @@ const squad = [
 let activeStyle = "steampunk";
 let startedAt = performance.now();
 let lastStatus = "";
+let gameStarted = false;
 const soldierFrameCache = {};
 const audioState = {
   context: null,
   master: null,
   noiseBuffer: null,
+  enabled: false,
   unlocked: false,
   nextStepAt: 0,
   explosionCycle: -1,
+};
+const sessionState = {
+  user: null,
+  roomId: "",
+  socket: null,
+  ready: false,
+  room: null,
+  nextMoveAt: 0,
 };
 
 ctx.imageSmoothingEnabled = false;
@@ -318,9 +338,15 @@ function replay() {
   audioState.explosionCycle = -1;
 }
 
-function unlockAudio() {
+function startGame() {
+  gameStarted = true;
+  shell.classList.remove("is-gated");
+  replay();
+}
+
+async function unlockAudio() {
   const AudioContext = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContext) return;
+  if (!AudioContext) return false;
 
   if (!audioState.context) {
     audioState.context = new AudioContext();
@@ -329,9 +355,28 @@ function unlockAudio() {
     audioState.master.connect(audioState.context.destination);
   }
 
-  audioState.context.resume().then(() => {
-    audioState.unlocked = true;
-  });
+  await audioState.context.resume();
+  audioState.unlocked = true;
+  return true;
+}
+
+async function setAudioEnabled(enabled) {
+  if (enabled) {
+    const unlocked = await unlockAudio();
+    audioState.enabled = unlocked;
+  } else {
+    audioState.enabled = false;
+    if (audioState.context) {
+      await audioState.context.suspend();
+    }
+  }
+
+  updateAudioButton();
+}
+
+function updateAudioButton() {
+  audioButton.textContent = audioState.enabled ? "Sound On" : "Sound Off";
+  audioButton.setAttribute("aria-pressed", String(audioState.enabled));
 }
 
 function getNoiseBuffer() {
@@ -373,7 +418,7 @@ function playSquareTone(frequency, start, duration, volume) {
 
 function playFootstepSound(count, phase) {
   const audio = audioState.context;
-  if (!audio || !audioState.unlocked) return;
+  if (!audio || !audioState.unlocked || !audioState.enabled) return;
 
   const base = phase === "escape" ? 118 : 84;
   const stagger = count > 2 ? 7 : 0;
@@ -384,7 +429,7 @@ function playFootstepSound(count, phase) {
 
 function playExplosionSound() {
   const audio = audioState.context;
-  if (!audio || !audioState.master || !audioState.unlocked) return;
+  if (!audio || !audioState.master || !audioState.unlocked || !audioState.enabled) return;
 
   const start = audio.currentTime;
   const noise = audio.createBufferSource();
@@ -413,7 +458,7 @@ function playExplosionSound() {
 }
 
 function updateDemoAudio(style, loop, time) {
-  if (!audioState.unlocked || !audioState.context) return;
+  if (!audioState.enabled || !audioState.unlocked || !audioState.context) return;
 
   const actors = squad.map((member, index) => getSquadMemberState(member, index, loop.elapsed, time)).filter(Boolean);
   const movingActors = actors.filter((actor) => (actor.phase === "enter" && actor.fade > 0.16) || actor.phase === "escape");
@@ -486,6 +531,169 @@ function setStatus(loop) {
     statusText.textContent = next;
     lastStatus = next;
   }
+}
+
+async function loadSession() {
+  try {
+    const response = await fetch("/api/auth/me", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error("auth unavailable");
+    const payload = await response.json();
+    sessionState.user = payload.authenticated ? payload.user : null;
+  } catch {
+    sessionState.user = null;
+  }
+
+  updateSessionUi();
+}
+
+function updateSessionUi() {
+  const user = sessionState.user;
+  authStatus.textContent = user ? `@${user.login}` : "Signed out";
+  loginButton.classList.toggle("is-hidden", Boolean(user));
+  logoutButton.classList.toggle("is-hidden", !user);
+  createRoomButton.disabled = !user;
+  joinRoomButton.disabled = !user;
+  readyButton.disabled = !user || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
+  roomCodeInput.disabled = !user;
+  readyButton.classList.toggle("is-active", sessionState.ready);
+  readyButton.setAttribute("aria-pressed", String(sessionState.ready));
+}
+
+function updateRoomStatus(nextStatus = null) {
+  if (nextStatus) {
+    roomStatus.textContent = nextStatus;
+    return;
+  }
+
+  if (!sessionState.roomId) {
+    roomStatus.textContent = "Solo";
+    return;
+  }
+
+  const playerCount = sessionState.room ? Object.keys(sessionState.room.players || {}).length : 1;
+  roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/4`;
+}
+
+async function createRoom() {
+  if (!sessionState.user) return;
+  updateRoomStatus("Creating");
+
+  try {
+    const response = await fetch("/api/rooms", { method: "POST", headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error("room create failed");
+    const room = await response.json();
+    roomCodeInput.value = room.roomId;
+    connectRoom(room.roomId);
+  } catch {
+    updateRoomStatus("Create failed");
+  }
+}
+
+function joinRoom() {
+  if (!sessionState.user) return;
+  const roomId = normalizeRoomId(roomCodeInput.value);
+  if (!roomId) {
+    updateRoomStatus("Enter code");
+    return;
+  }
+
+  connectRoom(roomId);
+}
+
+function connectRoom(roomId) {
+  disconnectRoom();
+  sessionState.roomId = roomId;
+  sessionState.ready = false;
+  updateRoomStatus("Connecting");
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const playerId = encodeURIComponent(sessionState.user.login);
+  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/rooms/${roomId}?player=${playerId}`);
+  sessionState.socket = socket;
+
+  socket.addEventListener("open", () => {
+    updateRoomStatus();
+    updateSessionUi();
+  });
+
+  socket.addEventListener("message", (event) => {
+    handleRoomMessage(event.data);
+  });
+
+  socket.addEventListener("close", () => {
+    sessionState.socket = null;
+    sessionState.ready = false;
+    updateRoomStatus(sessionState.roomId ? "Disconnected" : "Solo");
+    updateSessionUi();
+  });
+
+  socket.addEventListener("error", () => {
+    updateRoomStatus("Socket error");
+  });
+}
+
+function disconnectRoom() {
+  if (sessionState.socket) {
+    sessionState.socket.close();
+    sessionState.socket = null;
+  }
+}
+
+function handleRoomMessage(rawMessage) {
+  let message;
+  try {
+    message = JSON.parse(rawMessage);
+  } catch {
+    return;
+  }
+
+  if (message.state) {
+    sessionState.room = message.state;
+    syncDemoToRoomState(message.state);
+  }
+
+  updateRoomStatus();
+  updateSessionUi();
+}
+
+function syncDemoToRoomState(room) {
+  if (!room?.startedAt) return;
+  const serverElapsed = Date.now() - room.startedAt;
+  startedAt = performance.now() - serverElapsed;
+  gameStarted = true;
+  shell.classList.remove("is-gated");
+}
+
+function sendRoomMessage(message) {
+  if (!sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN) return;
+  sessionState.socket.send(JSON.stringify(message));
+}
+
+function updateRoomPosition(loop, time) {
+  if (!sessionState.user || !sessionState.room || time < sessionState.nextMoveAt) return;
+
+  const player = sessionState.room.players?.[sessionState.user.login];
+  if (!player) return;
+
+  const memberIndex = squad.findIndex((member) => member.role === player.role);
+  const member = squad[Math.max(0, memberIndex)];
+  const position = getSquadMemberState(member, Math.max(0, memberIndex), loop.elapsed, time) || getPointOnPath(member.enterPath, 0);
+  sendRoomMessage({
+    type: "player:move",
+    x: Math.round(position.x),
+    y: Math.round(position.y),
+  });
+  sessionState.nextMoveAt = time + 180;
+}
+
+function toggleReady() {
+  sessionState.ready = !sessionState.ready;
+  sendRoomMessage({ type: "ready", ready: sessionState.ready });
+  updateSessionUi();
+}
+
+function normalizeRoomId(value) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 40);
 }
 
 function drawBackground(style, time) {
@@ -1190,6 +1398,26 @@ function drawSquad(style, elapsed, time) {
   }
 }
 
+function drawRoomPlayers(style) {
+  if (!sessionState.room?.players || !sessionState.user) return;
+
+  const players = Object.values(sessionState.room.players).filter((player) => player.id !== sessionState.user.login);
+  for (const player of players) {
+    const x = Math.round(player.x || 0);
+    const y = Math.round(player.y || 0);
+    if (x <= 0 || y <= 0) continue;
+
+    px(x - 5, y - 14, 10, 10, style.scene.shadow);
+    px(x - 3, y - 18, 6, 6, style.scene.glow);
+    px(x - 2, y - 17, 4, 4, style.scene.accent);
+    px(x - 5, y - 7, 10, 3, style.scene.soldier.armor);
+    px(x - 8, y - 23, Math.min(34, player.id.length * 4 + 4), 5, "rgba(0, 0, 0, 0.62)");
+    ctx.fillStyle = style.css.text;
+    ctx.font = "5px monospace";
+    ctx.fillText(player.id.slice(0, 8), x - 6, y - 19);
+  }
+}
+
 function getSquadMemberState(member, index, elapsed, time) {
   const escapeStart = ESCAPE_START + index * 140;
 
@@ -1532,35 +1760,67 @@ function drawVignette(style) {
 
 function render(now) {
   const style = styles[activeStyle];
-  const elapsed = now - startedAt;
+  const elapsed = gameStarted ? now - startedAt : 0;
   const loop = getLoopState(elapsed);
   const plantProgress = clamp(loop.elapsed / 7200, 0, 1);
 
-  updateDemoAudio(style, loop, now);
+  if (gameStarted) {
+    updateDemoAudio(style, loop, now);
+    updateRoomPosition(loop, now);
+  }
   setStatus(loop);
   drawBackground(style, now);
   drawPlant(style, now, plantProgress, loop);
   drawExplosion(style, loop.elapsed, now);
   drawSquad(style, loop.elapsed, now);
+  drawRoomPlayers(style);
   drawVignette(style);
 
   requestAnimationFrame(render);
 }
 
+startButton.addEventListener("click", startGame);
+
+audioButton.addEventListener("click", () => {
+  setAudioEnabled(!audioState.enabled);
+});
+
+loginButton.addEventListener("click", () => {
+  window.location.href = "/api/auth/github/login";
+});
+
+logoutButton.addEventListener("click", () => {
+  window.location.href = "/api/auth/logout";
+});
+
+createRoomButton.addEventListener("click", createRoom);
+joinRoomButton.addEventListener("click", joinRoom);
+readyButton.addEventListener("click", toggleReady);
+roomCodeInput.addEventListener("input", () => {
+  roomCodeInput.value = normalizeRoomId(roomCodeInput.value);
+});
+roomCodeInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") joinRoom();
+});
+
 for (const button of styleButtons) {
   button.addEventListener("click", () => {
-    unlockAudio();
     setActiveStyle(button.dataset.style);
   });
 }
 
 replayButton.addEventListener("click", () => {
-  unlockAudio();
   replay();
 });
 
 window.addEventListener("keydown", (event) => {
-  unlockAudio();
+  if (!gameStarted && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    startGame();
+    return;
+  }
+
+  if (!gameStarted) return;
 
   if (event.key === "r" || event.key === "R" || event.key === " ") {
     replay();
@@ -1572,4 +1832,8 @@ window.addEventListener("keydown", (event) => {
 });
 
 setActiveStyle(activeStyle);
+updateAudioButton();
+updateSessionUi();
+updateRoomStatus();
+loadSession();
 requestAnimationFrame(render);

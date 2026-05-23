@@ -6,6 +6,16 @@ const GITHUB_USER_URL = "https://api.github.com/user";
 const SESSION_COOKIE = "ppr_session";
 const STATE_COOKIE = "ppr_oauth_state";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
+const REPAIR_DURATION_MS = 18_000;
+const ESCAPE_DURATION_MS = 7_000;
+const EXPLOSION_DURATION_MS = 2_200;
+const REBUILD_DURATION_MS = 3_800;
+const MAX_PLAYERS = 4;
+const START_NODES = [
+  { id: "n1", x: 180, y: 120, repaired: false },
+  { id: "n2", x: 245, y: 90, repaired: false },
+  { id: "n3", x: 300, y: 140, repaired: false },
+];
 
 export class GameRoom {
   constructor(state, env) {
@@ -15,12 +25,18 @@ export class GameRoom {
     this.roomState = {
       phase: "lobby",
       cycle: 0,
+      upgradeLevel: 0,
       startedAt: null,
+      phaseStartedAt: null,
       players: {},
+      nodes: cloneNodes(),
+      score: 0,
     };
   }
 
   async fetch(request) {
+    await this.advanceTimedPhase();
+
     if (request.headers.get("Upgrade") !== "websocket") {
       return json({
         ok: true,
@@ -32,6 +48,9 @@ export class GameRoom {
     const playerId = sanitizePlayerId(url.searchParams.get("player"));
     if (!playerId) {
       return json({ error: "Missing or invalid player id" }, 400);
+    }
+    if (!this.roomState.players[playerId] && Object.keys(this.roomState.players).length >= MAX_PLAYERS) {
+      return json({ error: "Room is full" }, 409);
     }
 
     const pair = new WebSocketPair();
@@ -47,10 +66,14 @@ export class GameRoom {
   acceptPlayer(socket, playerId) {
     socket.accept();
     this.sessions.set(socket, playerId);
-    this.roomState.players[playerId] = {
+    this.roomState.players[playerId] ||= {
       id: playerId,
       joinedAt: Date.now(),
+      role: this.nextRole(),
+      x: 42,
+      y: 178,
       ready: false,
+      escaped: false,
     };
 
     socket.send(
@@ -60,22 +83,24 @@ export class GameRoom {
         state: this.roomState,
       }),
     );
-    this.broadcast({ type: "player_joined", playerId, state: this.roomState }, socket);
+    this.broadcastState("player:joined", socket);
 
     socket.addEventListener("message", (event) => {
-      this.handleMessage(socket, event.data);
+      this.handleMessage(socket, event.data).catch(() => {
+        socket.send(JSON.stringify({ type: "error", error: "Message handling failed" }));
+      });
     });
 
     const leave = () => {
       this.sessions.delete(socket);
       delete this.roomState.players[playerId];
-      this.broadcast({ type: "player_left", playerId, state: this.roomState });
+      this.broadcastState("player:left");
     };
     socket.addEventListener("close", leave);
     socket.addEventListener("error", leave);
   }
 
-  handleMessage(socket, rawMessage) {
+  async handleMessage(socket, rawMessage) {
     let message;
     try {
       message = JSON.parse(rawMessage);
@@ -86,32 +111,127 @@ export class GameRoom {
 
     const playerId = this.sessions.get(socket);
     if (!playerId) return;
+    await this.advanceTimedPhase();
 
-    if (message.type === "ready") {
+    if (message.type === "ready" || message.type === "player:ready") {
       this.roomState.players[playerId].ready = Boolean(message.ready);
-      this.maybeStartRun();
-      this.broadcast({ type: "state", state: this.roomState });
+      await this.maybeStartRun();
+      this.broadcastState("room:state");
       return;
     }
 
-    if (message.type === "repair") {
-      this.broadcast({
-        type: "repair",
-        playerId,
-        nodeId: String(message.nodeId || ""),
-        at: Date.now(),
-      });
+    if (message.type === "move" || message.type === "player:move") {
+      this.updatePlayerPosition(playerId, message);
+      this.broadcastState("room:state");
+      return;
+    }
+
+    if (message.type === "repair" || message.type === "node:repair") {
+      await this.repairNode(playerId, String(message.nodeId || ""));
+      this.broadcastState("node:repair");
+      return;
+    }
+
+    if (message.type === "escape" || message.type === "player:escape") {
+      this.roomState.players[playerId].escaped = true;
+      if (Object.values(this.roomState.players).every((player) => player.escaped)) {
+        await this.setPhase("explosion", EXPLOSION_DURATION_MS);
+      }
+      this.broadcastState("player:escape");
     }
   }
 
-  maybeStartRun() {
+  async maybeStartRun() {
     const players = Object.values(this.roomState.players);
     if (this.roomState.phase !== "lobby" || players.length === 0) return;
     if (!players.every((player) => player.ready)) return;
 
-    this.roomState.phase = "run";
     this.roomState.cycle += 1;
     this.roomState.startedAt = Date.now();
+    this.roomState.nodes = cloneNodes();
+    this.roomState.score = 0;
+    for (const player of players) {
+      player.escaped = false;
+    }
+    await this.setPhase("repair", REPAIR_DURATION_MS);
+  }
+
+  updatePlayerPosition(playerId, message) {
+    const player = this.roomState.players[playerId];
+    if (!player) return;
+
+    player.x = clampNumber(message.x, 0, 384);
+    player.y = clampNumber(message.y, 0, 216);
+  }
+
+  async repairNode(playerId, nodeId) {
+    if (this.roomState.phase !== "repair") return;
+
+    const node = this.roomState.nodes.find((item) => item.id === nodeId);
+    if (!node || node.repaired) return;
+
+    node.repaired = true;
+    node.repairedBy = playerId;
+    node.repairedAt = Date.now();
+    this.roomState.score += 1;
+
+    if (this.roomState.nodes.every((item) => item.repaired)) {
+      await this.setPhase("escape", ESCAPE_DURATION_MS);
+    }
+  }
+
+  async alarm() {
+    await this.advanceTimedPhase(true);
+    this.broadcastState("phase:changed");
+  }
+
+  async advanceTimedPhase(fromAlarm = false) {
+    const phaseStartedAt = this.roomState.phaseStartedAt;
+    if (!phaseStartedAt || this.roomState.phase === "lobby") return;
+
+    const elapsed = Date.now() - phaseStartedAt;
+    if (this.roomState.phase === "repair" && elapsed >= REPAIR_DURATION_MS) {
+      await this.setPhase("escape", ESCAPE_DURATION_MS);
+    } else if (this.roomState.phase === "escape" && elapsed >= ESCAPE_DURATION_MS) {
+      await this.setPhase("explosion", EXPLOSION_DURATION_MS);
+    } else if (this.roomState.phase === "explosion" && elapsed >= EXPLOSION_DURATION_MS) {
+      await this.setPhase("rebuild", REBUILD_DURATION_MS);
+    } else if (this.roomState.phase === "rebuild" && elapsed >= REBUILD_DURATION_MS) {
+      this.finishRebuild();
+    } else if (fromAlarm) {
+      this.broadcastState("room:state");
+    }
+  }
+
+  async setPhase(phase, durationMs = null) {
+    this.roomState.phase = phase;
+    this.roomState.phaseStartedAt = Date.now();
+    if (durationMs) {
+      await this.state.storage.setAlarm(Date.now() + durationMs + 50);
+    }
+  }
+
+  finishRebuild() {
+    this.roomState.phase = "lobby";
+    this.roomState.phaseStartedAt = null;
+    this.roomState.startedAt = null;
+    this.roomState.upgradeLevel += this.roomState.score >= 2 ? 1 : 0;
+    this.roomState.nodes = cloneNodes();
+    this.roomState.score = 0;
+    for (const player of Object.values(this.roomState.players)) {
+      player.ready = false;
+      player.escaped = false;
+    }
+  }
+
+  nextRole() {
+    const roles = ["rifleman", "scout", "heavy", "engineer"];
+    const usedRoles = new Set(Object.values(this.roomState.players).map((player) => player.role));
+    return roles.find((role) => !usedRoles.has(role)) || roles[0];
+  }
+
+  broadcastState(type, exceptSocket = null) {
+    this.broadcast({ type, state: this.roomState }, exceptSocket);
   }
 
   broadcast(message, exceptSocket = null) {
@@ -122,6 +242,14 @@ export class GameRoom {
       }
     }
   }
+}
+
+function cloneNodes() {
+  return START_NODES.map((node) => ({ ...node }));
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value) || 0));
 }
 
 export default {
