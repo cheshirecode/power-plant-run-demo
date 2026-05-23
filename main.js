@@ -193,16 +193,18 @@ const plantPalettes = {
   },
 };
 
-const LOOP_DURATION = 52000;
-const EXPLOSION_START = 30000;
-const ESCAPE_START = 31800;
-const REBUILD_START = 42000;
-const REBUILD_END = 50000;
-const DEMO_TIME_SCALE = 0.5;
-const DEMO_REPAIR_DURATION = 30000;
+const LOOP_DURATION = 104000;
+const EXPLOSION_START = 60000;
+const ESCAPE_START = 63600;
+const REBUILD_START = 84000;
+const REBUILD_END = 100000;
+const DEMO_TIME_SCALE = 1;
+const DEMO_REPAIR_DURATION = 60000;
 const DEMO_NODE_SPAWN_MS = 3000;
 const DEMO_INITIAL_NODE_COUNT = 3;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
+const DEMO_SUMMARY_START = EXPLOSION_START + 1400;
+const DEMO_VORTEX_START = REBUILD_END - 1800;
 const DEMO_PATH_POINTS = [
   { x: 0, y: 354 },
   { x: 118, y: 310 },
@@ -227,11 +229,11 @@ const demoNodes = [
   { id: "dn12", x: 352, y: 358, value: 8.4, size: 10, holdMs: 3400, bonus: true },
 ];
 const demoAbilities = [
-  { id: "boost", label: "BOOST", name: "Overclock Boots", color: "#70a8ff" },
-  { id: "magnet", label: "MAG", name: "Magnet Gloves", color: "#57d56c" },
-  { id: "stasis", label: "FREEZE", name: "Stasis Popper", color: "#9fdfff" },
-  { id: "blink", label: "BLINK", name: "Smoke Dash", color: "#d5983b" },
-  { id: "greed", label: "GREED", name: "Greedy Wrench", color: "#ff6b28" },
+  { id: "boost", label: "BOOST", name: "Overclock Boots", color: "#70a8ff", accent: "#f1e8cf" },
+  { id: "magnet", label: "MAG", name: "Magnet Gloves", color: "#57d56c", accent: "#d7ffd8" },
+  { id: "stasis", label: "FREEZE", name: "Stasis Popper", color: "#9fdfff", accent: "#f1e8cf" },
+  { id: "blink", label: "BLINK", name: "Smoke Dash", color: "#d5983b", accent: "#f1e8cf" },
+  { id: "greed", label: "GREED", name: "Greedy Wrench", color: "#ff6b28", accent: "#ffe28f" },
 ];
 
 const squad = [
@@ -587,6 +589,32 @@ function getDemoNodePlan(member, index, cycle) {
   return [0, 1, 2].map((offset) => visibleNodes[(start + offset * stride) % visibleNodes.length]);
 }
 
+function getDemoDetonationPosition(member, index, cycle) {
+  const targets = getDemoNodePlan(member, index, cycle);
+  const points = [member.spawn, ...targets, { x: WORLD_CENTER.x + (index - 1.5) * 22, y: WORLD_CENTER.y + 38 + (index % 2) * 10 }];
+  return getPointOnPath(points, 1);
+}
+
+function getDemoRoundScore(member, index, loop) {
+  const targets = getDemoNodePlan(member, index, loop.cycle);
+  const ability = getDemoAbility(member, loop.cycle);
+  const greedBonus = ability.id === "greed" ? 1.25 : 1;
+  const repaired = targets.filter((node, nodeIndex) => loop.elapsed >= 1800 + nodeIndex * 5200);
+  return repaired.reduce((score, node) => score + node.value * greedBonus, 0);
+}
+
+function getDemoPlayerOutcome(member, index, loop) {
+  const position = getDemoDetonationPosition(member, index, loop.cycle);
+  const caught = Math.hypot(position.x - DEMO_BLAST.x, position.y - DEMO_BLAST.y) <= DEMO_BLAST.radius;
+  const roundScore = getDemoRoundScore(member, index, loop);
+  return {
+    caught,
+    roundScore: caught && loop.elapsed >= EXPLOSION_START ? 0 : roundScore,
+    storedRoundScore: roundScore,
+    state: caught && loop.elapsed >= EXPLOSION_START ? "incapacitated" : "alive",
+  };
+}
+
 function getDemoActorState(member, index, loop, time) {
   const ability = getDemoAbility(member, loop.cycle);
   const freezeActive = isDemoStasisPulseActive(loop.elapsed, loop.cycle);
@@ -609,6 +637,27 @@ function getDemoActorState(member, index, loop, time) {
       step: frozen ? 0 : Math.floor((time + index * 80) / (ability.id === "boost" ? 80 : 110)) % 2,
       fade: 1,
       dissolve: 0,
+    };
+  }
+
+  const outcome = getDemoPlayerOutcome(member, index, loop);
+  if (outcome.caught && loop.elapsed < REBUILD_START - 1200) {
+    const blastAge = clamp((loop.elapsed - EXPLOSION_START) / 1800, 0, 1);
+    const position = getDemoDetonationPosition(member, index, loop.cycle);
+    const knockback = 10 + index * 4;
+    const angle = Math.atan2(position.y - DEMO_BLAST.y, position.x - DEMO_BLAST.x);
+    return {
+      x: position.x + Math.cos(angle) * knockback * blastAge,
+      y: position.y + Math.sin(angle) * knockback * blastAge + 4 * blastAge,
+      member,
+      ability,
+      phase: "incapacitated",
+      stasisPulse: false,
+      progress: 1,
+      step: 0,
+      fade: 1,
+      dissolve: 0,
+      caught: true,
     };
   }
 
@@ -646,16 +695,18 @@ function getDemoRoom(loop, time) {
   const actors = squad.map((member, index) => getDemoActorState(member, index, loop, time)).filter(Boolean);
   const players = {};
   for (const actor of actors) {
+    const index = squad.indexOf(actor.member);
+    const outcome = getDemoPlayerOutcome(actor.member, index, loop);
     players[actor.member.id] = {
       id: actor.member.id,
       x: actor.x,
       y: actor.y,
       role: actor.member.role,
       ability: actor.ability,
-      state: actor.phase === "frozen" ? "frozen" : "alive",
+      state: actor.phase === "frozen" ? "frozen" : outcome.state,
       ready: true,
-      score: 0,
-      roundScore: 0,
+      score: outcome.roundScore,
+      roundScore: outcome.roundScore,
     };
   }
 
@@ -688,8 +739,22 @@ function getDemoRoom(loop, time) {
     blast: DEMO_BLAST,
     nodes,
     players,
+    summary: getDemoSummary(loop),
     targetPlayerCount: squad.length,
   };
+}
+
+function getDemoSummary(loop) {
+  return squad.map((member, index) => {
+    const outcome = getDemoPlayerOutcome(member, index, loop);
+    return {
+      id: member.id,
+      roundScore: outcome.roundScore,
+      score: outcome.roundScore,
+      state: outcome.state,
+      lost: outcome.caught ? outcome.storedRoundScore : 0,
+    };
+  });
 }
 
 function getPointOnPath(points, progress) {
@@ -1994,17 +2059,60 @@ function drawSquad(style, loop, time) {
   }
 }
 
+function drawAbilityIcon(ability, x, y, size = 9) {
+  const color = ability?.color || "#f1e8cf";
+  const accent = ability?.accent || "#f1e8cf";
+  px(x - 1, y - 1, size + 2, size + 2, "rgba(0, 0, 0, 0.72)");
+  px(x, y, size, size, color);
+
+  if (ability?.id === "boost") {
+    px(x + 2, y + 1, Math.max(2, size - 5), size - 3, "#18314d");
+    px(x + 1, y + size - 3, size - 2, 2, accent);
+    px(x + size - 3, y + 2, 2, 2, accent);
+    return;
+  }
+  if (ability?.id === "magnet") {
+    px(x + 2, y + 2, 2, size - 3, "#153119");
+    px(x + size - 4, y + 2, 2, size - 3, "#153119");
+    px(x + 4, y + size - 4, size - 8, 2, "#153119");
+    px(x + 2, y + 1, 2, 2, accent);
+    px(x + size - 4, y + 1, 2, 2, accent);
+    return;
+  }
+  if (ability?.id === "stasis") {
+    const mid = Math.floor(size / 2);
+    px(x + mid, y + 1, 1, size - 2, "#142a36");
+    px(x + 1, y + mid, size - 2, 1, "#142a36");
+    px(x + 3, y + 3, size - 6, size - 6, accent);
+    return;
+  }
+  if (ability?.id === "blink") {
+    px(x + 1, y + 2, size - 4, 2, "#5f4728");
+    px(x + 4, y + 5, size - 5, 2, accent);
+    px(x + 2, y + size - 3, 3, 2, "#5f4728");
+    return;
+  }
+  if (ability?.id === "greed") {
+    const mid = Math.floor(size / 2);
+    px(x + mid - 1, y + 1, 3, 2, accent);
+    px(x + 2, y + 3, size - 4, size - 6, "#6a250e");
+    px(x + mid - 1, y + size - 3, 3, 2, accent);
+  }
+}
+
 function drawDemoAbilityTag(style, actor) {
   if (!actor.ability) return;
   const x = Math.round(actor.x);
   const y = Math.round(actor.y);
   const label = actor.ability.label;
-  const width = Math.min(46, label.length * 5 + 6);
-  px(x - Math.floor(width / 2), y - 31, width, 8, "rgba(0, 0, 0, 0.76)");
-  px(x - Math.floor(width / 2), y - 31, width, 1, actor.ability.color);
+  const width = Math.min(64, label.length * 6 + 18);
+  const left = x - Math.floor(width / 2);
+  px(left, y - 36, width, 13, "rgba(0, 0, 0, 0.82)");
+  px(left, y - 36, width, 2, actor.ability.color);
+  drawAbilityIcon(actor.ability, left + 3, y - 33, 8);
   ctx.fillStyle = style.css.text;
-  ctx.font = "6px monospace";
-  ctx.fillText(label, x - Math.floor(width / 2) + 3, y - 25);
+  ctx.font = "7px monospace";
+  ctx.fillText(label, left + 15, y - 26);
 }
 
 function drawRoomPlayers(style) {
@@ -2123,10 +2231,10 @@ function drawClaimTimers(style, room = sessionState.room) {
 function drawBuildingCountdown(style, time, room = sessionState.room) {
   if (!room || room.phase !== "repair") return;
 
-  const seconds = getCountdownMs() / 1000;
+  const seconds = countdownMs(room) / 1000;
   const blink = seconds <= 7.5 ? Math.sin(time / 90) > -0.25 : Math.sin(time / 280) > -0.7;
 
-  const label = getCountdownLabel().padStart(5, "0");
+  const label = countdownLabel(room).padStart(5, "0");
   const x = 365;
   const y = 192;
   ctx.globalAlpha = blink ? 1 : 0.46;
@@ -2156,20 +2264,37 @@ function drawRoomHud(style) {
 
 function drawDemoHud(style, room, loop) {
   if (!room || room.phase !== "repair") return;
-  px(8, 8, 224, 64, "rgba(0, 0, 0, 0.62)");
-  px(8, 8, 224, 3, style.scene.accent);
+  px(8, 8, 258, 76, "rgba(0, 0, 0, 0.66)");
+  px(8, 8, 258, 3, style.scene.accent);
   ctx.fillStyle = style.css.text;
-  ctx.font = "7px monospace";
-  ctx.fillText(`DEMO RUN ${getDemoCountdownLabel(loop)}s`, 14, 20);
+  ctx.font = "8px monospace";
+  ctx.fillText(`DEMO TIMER ${getDemoCountdownLabel(loop)}s`, 14, 21);
   ctx.font = "6px monospace";
   for (let i = 0; i < squad.length; i += 1) {
     const member = squad[i];
     const ability = getDemoAbility(member, loop.cycle);
-    const y = 34 + i * 8;
-    px(14, y - 5, 5, 5, ability.color);
+    const y = 36 + i * 10;
+    drawAbilityIcon(ability, 15, y - 8, 8);
     ctx.fillStyle = style.css.text;
-    ctx.fillText(`${member.id.toUpperCase()} ${ability.name}`, 23, y);
+    ctx.fillText(`${ability.label.padEnd(6, " ")} ${member.id.toUpperCase()} ${ability.name}`, 28, y);
   }
+}
+
+function drawDemoBlastReport(style, room, loop) {
+  if (!room || loop.elapsed < DEMO_SUMMARY_START || loop.elapsed >= DEMO_VORTEX_START) return;
+  const summary = room.summary || [];
+  drawRoundSummary(style, summary, {
+    x: 520,
+    y: 22,
+    width: 202,
+    title: "DEMO BLAST REPORT",
+  });
+
+  ctx.fillStyle = style.css.muted;
+  ctx.font = "6px monospace";
+  const caught = summary.filter((row) => row.state === "incapacitated").length;
+  ctx.fillText(`${caught} caught in blast`, 536, 122);
+  ctx.fillText("round score wiped", 536, 132);
 }
 
 function drawRoundSummary(style, summary, options = {}) {
@@ -2274,6 +2399,11 @@ function drawPixelSoldierSprite(style, actor, time) {
 
   ctx.globalAlpha = actor.fade;
   drawPixelShadow(x, y, actor.phase);
+  if (actor.phase === "incapacitated") {
+    drawCharacterMotionDetails(style, actor, x, y, time);
+    ctx.globalAlpha = 1;
+    return;
+  }
   ctx.drawImage(frame.canvas, drawX, drawY);
   drawCharacterMotionDetails(style, actor, x, y, time);
 
@@ -2294,6 +2424,21 @@ function drawPixelSoldierSprite(style, actor, time) {
 
 function drawCharacterMotionDetails(style, actor, x, y, time) {
   const colors = getCharacterColors(style, actor.member);
+  if (actor.phase === "incapacitated") {
+    ctx.globalAlpha = 0.76;
+    px(x - 14, y - 12, 29, 6, "rgba(0, 0, 0, 0.58)");
+    px(x - 10, y - 23, 22, 4, "#2b1a11");
+    px(x - 7, y - 30, 13, 4, colors.armor);
+    px(x - 3, y - 28, 8, 2, "#ff6b28");
+    px(x + 9, y - 18, 9, 2, colors.weapon);
+    px(x - 15, y - 18, 8, 2, colors.boot);
+    ctx.globalAlpha = 0.5 + Math.sin(time / 140) * 0.16;
+    px(x - 3, y - 36, 2, 2, "#fff6cf");
+    px(x + 3, y - 39, 3, 3, "#ff6b28");
+    ctx.globalAlpha = 1;
+    return;
+  }
+
   if (actor.phase === "frozen") {
     ctx.globalAlpha = 0.68;
     px(x - 12, y - 31, 24, 23, "rgba(112, 168, 255, 0.42)");
@@ -2348,7 +2493,7 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
 }
 
 function drawPixelShadow(x, y, phase) {
-  const shrink = phase === "enter" ? 0.85 : 1;
+  const shrink = phase === "enter" ? 0.85 : phase === "incapacitated" ? 1.25 : 1;
   ctx.fillStyle = "rgba(0, 0, 0, 0.38)";
   ctx.fillRect(Math.round(x - 9 * shrink), Math.round(y + 3), Math.round(20 * shrink), 4);
   ctx.fillRect(Math.round(x - 5 * shrink), Math.round(y + 6), Math.round(10 * shrink), 2);
@@ -2581,6 +2726,39 @@ function drawExplosion(style, elapsed, time) {
   ctx.globalAlpha = 1;
 }
 
+function drawVortexTransition(style, loop, time) {
+  if (loop.elapsed < DEMO_VORTEX_START) return;
+  const progress = clamp((loop.elapsed - DEMO_VORTEX_START) / (REBUILD_END - DEMO_VORTEX_START), 0, 1);
+  const centerX = WORLD_CENTER.x;
+  const centerY = WORLD_CENTER.y;
+  const spin = time / 170;
+
+  ctx.globalAlpha = 0.2 + progress * 0.62;
+  px(0, 0, VIEW.width, VIEW.height, "rgba(0, 0, 0, 0.58)");
+  ctx.globalAlpha = 1;
+
+  for (let i = 0; i < 84; i += 1) {
+    const lane = i % 7;
+    const angle = spin + i * 0.42 + progress * 5;
+    const radius = (1 - progress) * (230 - lane * 13) + lane * 4;
+    const x = centerX + Math.cos(angle) * radius;
+    const y = centerY + Math.sin(angle) * radius * 0.62;
+    const size = 2 + (i % 4);
+    const color = i % 3 === 0 ? style.scene.glow : i % 3 === 1 ? style.scene.accent : style.css.text;
+    ctx.globalAlpha = clamp(0.18 + progress * 0.8 - lane * 0.035, 0.08, 0.88);
+    px(x, y, size, size, color);
+  }
+
+  const core = 10 + Math.floor(progress * 52);
+  ctx.globalAlpha = 0.52 + progress * 0.28;
+  drawPixelCircle(centerX, centerY, core, style.scene.glow, style.scene.accent);
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = style.css.text;
+  ctx.font = "8px monospace";
+  ctx.fillText("NEXT RUN LOADING", centerX - 42, centerY + 4);
+}
+
 function drawVignette(style) {
   const colors = style.scene;
   const gradient = ctx.createLinearGradient(0, 0, 0, VIEW.height);
@@ -2634,6 +2812,8 @@ function render(now) {
     drawSquad(style, loop, now);
     drawClaimTimers(style, demoRoom);
     drawDemoHud(style, demoRoom, loop);
+    drawDemoBlastReport(style, demoRoom, loop);
+    drawVortexTransition(style, loop, now);
   }
   drawVignette(style);
 

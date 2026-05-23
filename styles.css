@@ -240,6 +240,33 @@ h1 {
   width: 126px;
 }
 
+.legend-menu-panel {
+  width: min(330px, calc(100vw - 28px));
+  gap: 6px;
+}
+
+.legend-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 64%, #000);
+  background: color-mix(in srgb, var(--panel-strong) 58%, #000);
+}
+
+.legend-copy {
+  color: var(--muted);
+  font-size: 0.55rem;
+  line-height: 1.3;
+}
+
+.legend-copy strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
 .control-button:disabled,
 .room-input:disabled,
 .bot-toggle:has(input:disabled),
@@ -321,6 +348,12 @@ h1 {
     linear-gradient(transparent 0 2px, var(--muted) 2px 4px, transparent 4px 6px, var(--muted) 6px 8px, transparent 8px 10px, var(--muted) 10px 12px, transparent 12px);
 }
 
+.icon-legend {
+  background:
+    linear-gradient(90deg, var(--accent) 0 3px, transparent 3px 5px, var(--muted) 5px 14px),
+    linear-gradient(transparent 0 3px, var(--panel-bg) 3px 5px, transparent 5px 8px, var(--panel-bg) 8px 10px, transparent 10px);
+}
+
 .icon-ready {
   background:
     linear-gradient(135deg, transparent 0 42%, var(--accent-2) 42% 56%, transparent 56%),
@@ -362,6 +395,53 @@ h1 {
   border-right: 2px solid var(--accent-2);
   border-radius: 50%;
   content: "";
+}
+
+.skill-icon {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  image-rendering: pixelated;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+.skill-boost {
+  background:
+    linear-gradient(90deg, transparent 0 5px, #70a8ff 5px 12px, transparent 12px),
+    linear-gradient(135deg, transparent 0 42%, #f1e8cf 42% 56%, transparent 56%),
+    linear-gradient(#18314d, #10243d);
+}
+
+.skill-magnet {
+  background:
+    linear-gradient(90deg, #57d56c 0 5px, transparent 5px 17px, #57d56c 17px 22px),
+    linear-gradient(transparent 0 6px, #57d56c 6px 12px, transparent 12px),
+    linear-gradient(#153119, #0d2011);
+}
+
+.skill-stasis {
+  background:
+    linear-gradient(90deg, transparent 0 9px, #9fdfff 9px 13px, transparent 13px),
+    linear-gradient(transparent 0 9px, #9fdfff 9px 13px, transparent 13px),
+    linear-gradient(45deg, transparent 0 44%, #f1e8cf 44% 56%, transparent 56%),
+    linear-gradient(#142a36, #0b1a22);
+}
+
+.skill-blink {
+  background:
+    linear-gradient(90deg, transparent 0 4px, #d5983b 4px 10px, transparent 10px),
+    linear-gradient(transparent 0 12px, rgba(241, 232, 207, 0.8) 12px 16px, transparent 16px),
+    linear-gradient(135deg, transparent 0 50%, #5f4728 50% 65%, transparent 65%),
+    linear-gradient(#2a2619, #15130d);
+}
+
+.skill-greed {
+  background:
+    linear-gradient(45deg, transparent 0 34%, #ff6b28 34% 65%, transparent 65%),
+    linear-gradient(135deg, transparent 0 38%, #f1e8cf 38% 50%, transparent 50%),
+    linear-gradient(#3a1512, #1c0e08);
 }
 
 .control-button:hover,
