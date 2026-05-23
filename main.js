@@ -616,6 +616,10 @@ function updateSessionUi() {
   roomReplayButton.setAttribute("aria-pressed", String(replayVoted));
   roomReplayButton.textContent = replayVoted ? "Replay voted" : "Replay";
   endRoomButton.disabled = !user || !sessionState.roomId || !isOwner;
+  replayButton.disabled = Boolean(sessionState.room) && (!local || isSpectator || !isEndPhase || replayVoted);
+  replayButton.classList.toggle("is-active", Boolean(sessionState.room) && replayVoted);
+  replayButton.setAttribute("aria-pressed", String(Boolean(sessionState.room) && replayVoted));
+  replayButton.textContent = sessionState.room ? (replayVoted ? "Voted" : "Replay") : "Replay";
   roomReadyButton.disabled = readyButton.disabled;
   roomReadyButton.textContent = isSpectator ? "Spectating" : "Ready";
   shell.classList.toggle("is-roomed", Boolean(sessionState.roomId));
@@ -979,6 +983,14 @@ function toggleReady() {
 
 function voteReplayRoom() {
   sendRoomMessage({ type: "replay" });
+}
+
+function replayOrVote() {
+  if (sessionState.room) {
+    voteReplayRoom();
+    return;
+  }
+  replay();
 }
 
 function endRoomGame() {
@@ -1849,16 +1861,17 @@ function drawBuildingCountdown(style, time) {
 
   const seconds = getCountdownMs() / 1000;
   const blink = seconds <= 5 ? Math.sin(time / 90) > -0.25 : Math.sin(time / 280) > -0.7;
-  if (!blink) return;
 
   const label = getCountdownLabel().padStart(5, "0");
   const x = 213;
   const y = 58;
+  ctx.globalAlpha = blink ? 1 : 0.46;
   px(x - 18, y - 21, 86, 31, "rgba(0, 0, 0, 0.68)");
   px(x - 18, y - 21, 86, 3, style.scene.accent);
   ctx.fillStyle = seconds <= 5 ? "#ff6b28" : style.css.text;
   ctx.font = "24px monospace";
   ctx.fillText(label, x, y);
+  ctx.globalAlpha = 1;
 }
 
 function drawRoomHud(style) {
@@ -2377,9 +2390,7 @@ for (const button of styleButtons) {
   });
 }
 
-replayButton.addEventListener("click", () => {
-  replay();
-});
+replayButton.addEventListener("click", replayOrVote);
 
 window.addEventListener("keydown", (event) => {
   if (!gameStarted && (event.key === "Enter" || event.key === " ")) {
