@@ -608,9 +608,13 @@ function getDemoCountdownMs(loop) {
 
 function getDemoCountdownMsForElapsed(cycle, elapsed) {
   if (elapsed >= EXPLOSION_START) return 0;
-  const probeLoop = { cycle, elapsed };
-  const nodeDeltaMs = getDemoNodeStates(probeLoop).reduce((sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum), 0);
+  const nodeDeltaMs = getDemoNodeTimerDeltaMs(cycle, elapsed);
   return Math.max(0, DEMO_REPAIR_DURATION - elapsed + nodeDeltaMs);
+}
+
+function getDemoNodeTimerDeltaMs(cycle, elapsed) {
+  const probeLoop = { cycle, elapsed };
+  return getDemoNodeStates(probeLoop).reduce((sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum), 0);
 }
 
 function getDemoDetonationElapsed(cycle) {
@@ -723,8 +727,8 @@ function getDemoPathSpeed(ability) {
 function getDemoHoldDurationMs(node, ability) {
   const magnitude = Math.abs(node.value);
   const highValue = magnitude >= 6 || node.bonus;
-  const abilityFactor = ability.id === "greed" && highValue ? 0.16 : ability.id === "greed" ? 0.34 : ability.id === "magnet" ? 0.48 : 0.52;
-  return Math.max(540, Math.round(node.holdMs * abilityFactor));
+  const abilityFactor = ability.id === "greed" && highValue ? 0.26 : ability.id === "greed" ? 0.46 : ability.id === "magnet" ? 0.62 : 0.68;
+  return Math.max(1150, Math.round(node.holdMs * abilityFactor));
 }
 
 function getDemoRouteState(member, index, cycle, elapsed) {
@@ -914,7 +918,6 @@ function getDemoStasisPulseSources(elapsed, cycle) {
 function getDemoRoom(loop, time) {
   if (sessionState.room) return sessionState.room;
   const now = Date.now();
-  const countdownEndsAt = now + getDemoCountdownMs(loop);
   const actors = squad.map((member, index) => getDemoActorState(member, index, loop, time)).filter(Boolean);
   const players = {};
   for (const actor of actors) {
@@ -935,6 +938,8 @@ function getDemoRoom(loop, time) {
 
   const visibleNodes = getDemoVisibleNodes(loop.cycle, loop.elapsed);
   const nodes = getDemoNodeStates(loop, now, actors, visibleNodes);
+  const nodeTimerDeltaMs = nodes.reduce((sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum), 0);
+  const countdownEndsAt = now + Math.max(0, DEMO_REPAIR_DURATION - loop.elapsed + nodeTimerDeltaMs);
 
   return {
     phase: loop.elapsed >= EXPLOSION_START ? "explosion" : "repair",
@@ -942,6 +947,8 @@ function getDemoRoom(loop, time) {
     phaseStartedAt: now - loop.elapsed,
     blast: DEMO_BLAST,
     nodes,
+    nodeTimerDeltaMs,
+    repairedNodeCount: nodes.filter((node) => node.repaired).length,
     players,
     summary: getDemoSummary(loop),
     targetPlayerCount: squad.length,
@@ -2445,6 +2452,16 @@ function drawRoomObjectives(style, time, room = sessionState.room) {
         ctx.globalAlpha = 0.28 * (1 - spawnAge / 900);
         drawPixelCircle(node.x, node.y, 18 + Math.floor(spawnAge / 90), isNegative ? "#ff6b28" : style.scene.glow);
       }
+      if (isClaimed && !node.repaired) {
+        const ring = half + 8 + Math.floor(Math.sin(time / 90 + node.x) * 2);
+        ctx.globalAlpha = 0.32;
+        drawPixelCircle(node.x, node.y, ring, style.css.text, isNegative ? "#ff6b28" : style.scene.glow);
+        ctx.globalAlpha = 0.86;
+        px(node.x - half - 4, node.y - half - 4, 3, 3, style.css.text);
+        px(node.x + half + 1, node.y - half - 4, 3, 3, style.css.text);
+        px(node.x - half - 4, node.y + half + 1, 3, 3, style.css.text);
+        px(node.x + half + 1, node.y + half + 1, 3, 3, style.css.text);
+      }
       drawNodeSmoke(style, node, time, isNegative, isRich);
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
       px(node.x - half - 1, node.y - half - 1, size + 2, size + 2, edge);
@@ -2481,11 +2498,12 @@ function drawClaimTimers(style, room = sessionState.room) {
     const x = Math.round(player.x || node.x);
     const y = Math.round(player.y || node.y) - 20;
     const label = formatHoldLabel(remainingMs);
-    px(x - 10, y - 7, 20, 9, "rgba(0, 0, 0, 0.72)");
-    px(x - 10, y - 7, Math.round(20 * Math.max(0, remainingMs / node.holdMs)), 2, style.scene.accent);
+    const width = 34;
+    px(x - Math.floor(width / 2), y - 10, width, 13, "rgba(0, 0, 0, 0.8)");
+    px(x - Math.floor(width / 2), y - 10, Math.round(width * Math.max(0, remainingMs / (node.claimDurationMs || node.holdMs))), 3, style.scene.accent);
     ctx.fillStyle = style.css.text;
-    ctx.font = "7px monospace";
-    ctx.fillText(label, x - 9, y);
+    ctx.font = "8px monospace";
+    ctx.fillText(label, x - 12, y);
   }
 }
 
@@ -2504,6 +2522,16 @@ function drawBuildingCountdown(style, time, room = sessionState.room) {
   ctx.fillStyle = seconds <= 7.5 ? "#ff6b28" : style.css.text;
   ctx.font = "24px monospace";
   ctx.fillText(label, x, y);
+  if (room.nodeTimerDeltaMs !== undefined) {
+    const deltaSeconds = room.nodeTimerDeltaMs / 1000;
+    const deltaLabel = `${deltaSeconds >= 0 ? "+" : ""}${deltaSeconds.toFixed(1)}s nodes`;
+    const repairedLabel = room.repairedNodeCount ? `${room.repairedNodeCount} captured` : "claiming";
+    ctx.font = "7px monospace";
+    ctx.fillStyle = deltaSeconds < 0 ? "#ff6b28" : style.scene.glow;
+    ctx.fillText(deltaLabel, x - 8, y + 13);
+    ctx.fillStyle = style.css.text;
+    ctx.fillText(repairedLabel, x - 8, y + 22);
+  }
   ctx.globalAlpha = 1;
 }
 
