@@ -193,23 +193,24 @@ const plantPalettes = {
   },
 };
 
-const LOOP_DURATION = 78000;
-const EXPLOSION_START = 60000;
-const ESCAPE_START = 61200;
-const REBUILD_START = 68000;
-const REBUILD_END = 78000;
+const LOOP_DURATION = 30000;
+const EXPLOSION_START = 22000;
+const ESCAPE_START = 21200;
+const REBUILD_START = 25000;
+const REBUILD_END = 30000;
 const DEMO_TIME_SCALE = 1;
-const DEMO_REPAIR_DURATION = 60000;
+const DEMO_REPAIR_DURATION = 20000;
 const DEMO_NODE_SPAWN_MS = 2000;
 const DEMO_INITIAL_NODE_COUNT = 20;
 const DEMO_RUNNER_SPEED = 2.15;
-const DEMO_ESCAPE_THRESHOLD_MS = 9000;
-const DEMO_ROUTE_DURATION_MS = 10500;
+const DEMO_ESCAPE_THRESHOLD_MS = 4800;
 const DEMO_STASIS_RADIUS = 62;
 const DEMO_STASIS_PULSE_MS = 420;
+const DEMO_NODE_TIMER_FACTOR_MS = 900;
+const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_SUMMARY_START = EXPLOSION_START + 1400;
-const DEMO_VORTEX_START = REBUILD_END - 2800;
+const DEMO_VORTEX_START = REBUILD_END - 1800;
 const DEMO_PATH_POINTS = [
   { x: 0, y: 354 },
   { x: 118, y: 310 },
@@ -319,6 +320,7 @@ let gameStarted = false;
 const soldierFrameCache = {};
 const demoVisibleNodeCache = new Map();
 const demoNodePlanCache = new Map();
+const demoDetonationCache = new Map();
 const audioState = {
   context: null,
   master: null,
@@ -601,8 +603,40 @@ function getLoopState(totalElapsed) {
 }
 
 function getDemoCountdownMs(loop) {
-  if (loop.elapsed >= EXPLOSION_START) return 0;
-  return Math.max(0, DEMO_REPAIR_DURATION - loop.elapsed);
+  return getDemoCountdownMsForElapsed(loop.cycle, loop.elapsed);
+}
+
+function getDemoCountdownMsForElapsed(cycle, elapsed) {
+  if (elapsed >= EXPLOSION_START) return 0;
+  const probeLoop = { cycle, elapsed };
+  const nodeDeltaMs = getDemoNodeStates(probeLoop).reduce((sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum), 0);
+  return Math.max(0, DEMO_REPAIR_DURATION - elapsed + nodeDeltaMs);
+}
+
+function getDemoDetonationElapsed(cycle) {
+  if (demoDetonationCache.has(cycle)) return demoDetonationCache.get(cycle);
+  let detonationElapsed = EXPLOSION_START;
+  for (let elapsed = 0; elapsed <= EXPLOSION_START; elapsed += 100) {
+    if (getDemoCountdownMsForElapsed(cycle, elapsed) <= 0) {
+      detonationElapsed = elapsed;
+      break;
+    }
+  }
+  demoDetonationCache.set(cycle, detonationElapsed);
+  return detonationElapsed;
+}
+
+function getDemoVisualLoop(loop) {
+  const detonationElapsed = getDemoDetonationElapsed(loop.cycle);
+  if (loop.elapsed < detonationElapsed) return loop;
+  const shiftedElapsed = EXPLOSION_START + (loop.elapsed - detonationElapsed);
+  const rebuildProgress = clamp((shiftedElapsed - REBUILD_START) / (REBUILD_END - REBUILD_START), 0, 1);
+  return {
+    ...loop,
+    elapsed: shiftedElapsed,
+    rebuildProgress,
+    upgradeLevel: Math.min(3, loop.cycle + rebuildProgress),
+  };
 }
 
 function getDemoCountdownLabel(loop) {
@@ -686,24 +720,86 @@ function getDemoPathSpeed(ability) {
   return DEMO_RUNNER_SPEED * abilitySpeed;
 }
 
-function getDemoPlayPosition(member, index, cycle, elapsed) {
+function getDemoHoldDurationMs(node, ability) {
+  const magnitude = Math.abs(node.value);
+  const highValue = magnitude >= 6 || node.bonus;
+  const abilityFactor = ability.id === "greed" && highValue ? 0.16 : ability.id === "greed" ? 0.34 : ability.id === "magnet" ? 0.48 : 0.52;
+  return Math.max(540, Math.round(node.holdMs * abilityFactor));
+}
+
+function getDemoRouteState(member, index, cycle, elapsed) {
   const ability = getDemoAbility(member, cycle);
   const escapeThreshold = getDemoEscapeThresholdMs(ability);
   const escapeStart = Math.max(0, EXPLOSION_START - escapeThreshold);
   const targets = getDemoNodePlan(member, index, cycle);
-  const points = [member.spawn, ...targets, member.spawn];
 
   if (elapsed >= escapeStart) {
-    const start = getDemoPlayPosition(member, index, cycle, escapeStart - 1);
+    const start = getDemoRouteState(member, index, cycle, escapeStart - 1);
     const progress = easeInOut(clamp((elapsed - escapeStart) / escapeThreshold, 0, 1));
-    return getPointOnPath([start, member.escape], progress);
+    return {
+      ...getPointOnPath([start, member.escape], progress),
+      phase: "escape",
+      activeNode: null,
+      holdRemainingMs: 0,
+      repairedNodeIds: getDemoCompletedRouteNodeIds(member, index, cycle, escapeStart - 1),
+    };
   }
 
-  const speed = getDemoPathSpeed(ability);
-  const routeDuration = DEMO_ROUTE_DURATION_MS + index * 430;
-  const routeElapsed = elapsed * speed - index * 340;
-  const progress = routeElapsed <= 0 ? 0 : (routeElapsed % routeDuration) / routeDuration;
-  return getPointOnPath(points.length > 1 ? points : [member.spawn, member.escape], progress);
+  const repairedNodeIds = new Set();
+  let cursor = Math.max(0, elapsed - index * 170);
+  let position = member.spawn;
+  const speed = DEMO_RUNNER_PIXELS_PER_MS * getDemoPathSpeed(ability);
+  const route = targets.length > 0 ? targets : [member.escape];
+
+  while (cursor > 0) {
+    for (const node of route) {
+      const distance = Math.hypot(node.x - position.x, node.y - position.y);
+      const travelMs = Math.max(120, distance / speed);
+      if (cursor < travelMs) {
+        return {
+          ...getPointOnPath([position, node], cursor / travelMs),
+          phase: "move",
+          activeNode: null,
+          holdRemainingMs: 0,
+          repairedNodeIds: [...repairedNodeIds],
+        };
+      }
+
+      cursor -= travelMs;
+      position = node;
+      const holdMs = getDemoHoldDurationMs(node, ability);
+      if (cursor < holdMs) {
+        return {
+          x: node.x,
+          y: node.y,
+          phase: "claim",
+          activeNode: node,
+          holdRemainingMs: holdMs - cursor,
+          holdDurationMs: holdMs,
+          repairedNodeIds: [...repairedNodeIds],
+        };
+      }
+
+      cursor -= holdMs;
+      repairedNodeIds.add(node.id);
+    }
+  }
+
+  return {
+    ...position,
+    phase: "move",
+    activeNode: null,
+    holdRemainingMs: 0,
+    repairedNodeIds: [...repairedNodeIds],
+  };
+}
+
+function getDemoPlayPosition(member, index, cycle, elapsed) {
+  return getDemoRouteState(member, index, cycle, elapsed);
+}
+
+function getDemoCompletedRouteNodeIds(member, index, cycle, elapsed) {
+  return getDemoRouteState(member, index, cycle, elapsed).repairedNodeIds || [];
 }
 
 function getDemoDetonationPosition(member, index, cycle) {
@@ -711,10 +807,10 @@ function getDemoDetonationPosition(member, index, cycle) {
 }
 
 function getDemoRoundScore(member, index, loop) {
-  const targets = getDemoNodePlan(member, index, loop.cycle);
   const ability = getDemoAbility(member, loop.cycle);
   const greedBonus = ability.id === "greed" ? 1.25 : 1;
-  const repaired = targets.filter((node, nodeIndex) => loop.elapsed >= 1800 + nodeIndex * 5200);
+  const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, Math.min(loop.elapsed, EXPLOSION_START - 1)));
+  const repaired = demoNodes.filter((node) => repairedIds.has(node.id));
   return repaired.reduce((score, node) => score + node.value * greedBonus, 0);
 }
 
@@ -749,8 +845,9 @@ function getDemoActorState(member, index, loop, time) {
       ability,
       phase: frozen ? "frozen" : "repair",
       stasisPulse: stasisSources.some((source) => source.memberId === member.id),
+      frozenUntil: frozen ? time + 1000 : 0,
       progress: clamp(loop.elapsed / EXPLOSION_START, 0, 1),
-      step: frozen ? 0 : Math.floor((time + index * 80) / (ability.id === "boost" ? 80 : 110)) % 2,
+      step: frozen || position.phase === "claim" ? 0 : Math.floor((time + index * 80) / (ability.id === "boost" ? 80 : 110)) % 2,
       fade: 1,
       dissolve: 0,
     };
@@ -837,22 +934,7 @@ function getDemoRoom(loop, time) {
   }
 
   const visibleNodes = getDemoVisibleNodes(loop.cycle, loop.elapsed);
-  const nodes = visibleNodes.map((node, index) => {
-    const claimant = actors.find((actor) => demoActorCanClaimNode(actor, node));
-    const holdTime = claimant?.ability.id === "greed" ? 1600 : claimant?.ability.id === "magnet" ? 1900 : 2200;
-    const nodeSpawnedAt = Math.max(0, (index - DEMO_INITIAL_NODE_COUNT) * DEMO_NODE_SPAWN_MS);
-    const claimProgress = claimant ? clamp((loop.elapsed - nodeSpawnedAt - index * 90) / holdTime, 0, 1) : 0;
-    return {
-      ...node,
-      spawnedAt: nodeSpawnedAt,
-      seed: node.x * 0.013 + node.y * 0.017 + loop.cycle,
-      repaired: claimProgress >= 1 || loop.elapsed > EXPLOSION_START - 900,
-      claimedBy: claimProgress > 0.15 && claimProgress < 1 && claimant ? claimant.member.id : null,
-      claimEndsAt: claimProgress > 0.15 && claimProgress < 1 ? now + Math.max(0, (1 - claimProgress) * holdTime) : null,
-      claimDurationMs: holdTime,
-      negative: node.value < 0,
-    };
-  });
+  const nodes = getDemoNodeStates(loop, now, actors, visibleNodes);
 
   return {
     phase: loop.elapsed >= EXPLOSION_START ? "explosion" : "repair",
@@ -864,6 +946,36 @@ function getDemoRoom(loop, time) {
     summary: getDemoSummary(loop),
     targetPlayerCount: squad.length,
   };
+}
+
+function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes = getDemoVisibleNodes(loop.cycle, loop.elapsed)) {
+  const actorRoutes = squad.map((member, index) => ({
+    member,
+    index,
+    ability: getDemoAbility(member, loop.cycle),
+    route: getDemoRouteState(member, index, loop.cycle, Math.min(loop.elapsed, EXPLOSION_START - 1)),
+  }));
+  const activeActors = actors || actorRoutes.map(({ member, index, ability, route }) => ({ ...route, member, ability, id: member.id, index }));
+  const repairedNodeIds = new Set(actorRoutes.flatMap((entry) => entry.route.repairedNodeIds || []));
+
+  return visibleNodes.map((node, index) => {
+    const claimant = activeActors.find((actor) => actor.phase !== "frozen" && actor.activeNode?.id === node.id);
+    const routeClaimant = actorRoutes.find((entry) => entry.member.id === claimant?.member?.id || entry.member.id === claimant?.id);
+    const nodeSpawnedAt = Math.max(0, (index - DEMO_INITIAL_NODE_COUNT) * DEMO_NODE_SPAWN_MS);
+    const repaired = repairedNodeIds.has(node.id);
+    const holdRemainingMs = routeClaimant?.route.activeNode?.id === node.id ? routeClaimant.route.holdRemainingMs : 0;
+    const holdDurationMs = routeClaimant?.route.holdDurationMs || node.holdMs;
+    return {
+      ...node,
+      spawnedAt: nodeSpawnedAt,
+      seed: node.x * 0.013 + node.y * 0.017 + loop.cycle,
+      repaired,
+      claimedBy: !repaired && holdRemainingMs > 0 && claimant ? claimant.member?.id || claimant.id : null,
+      claimEndsAt: !repaired && holdRemainingMs > 0 && claimant ? now + holdRemainingMs : null,
+      claimDurationMs: holdDurationMs,
+      negative: node.value < 0,
+    };
+  });
 }
 
 function demoActorCanClaimNode(actor, node) {
@@ -2598,27 +2710,42 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
   }
 
   if (actor.ability?.id === "magnet" && actor.phase === "repair") {
-    ctx.globalAlpha = 0.18 + Math.sin(time / 260) * 0.06;
-    drawPixelCircle(x, y - 11, 28, actor.ability.color);
+    ctx.globalAlpha = 0.16 + Math.sin(time / 240) * 0.05;
+    drawPixelCircle(x, y - 11, 42, actor.ability.color);
+    ctx.globalAlpha = 0.9;
+    px(x - 17, y - 31, 4, 9, actor.ability.color);
+    px(x + 13, y - 31, 4, 9, actor.ability.color);
+    px(x - 13, y - 23, 26, 4, actor.ability.accent);
     ctx.globalAlpha = 1;
   } else if (actor.ability?.id === "boost" && actor.phase === "repair") {
-    ctx.globalAlpha = 0.55;
-    px(x - 18, y - 8, 9, 2, style.scene.glow);
-    px(x - 24, y - 5, 12, 2, style.scene.accent);
+    for (let i = 0; i < 5; i += 1) {
+      ctx.globalAlpha = 0.58 - i * 0.08;
+      px(x - 18 - i * 6, y - 8 + (i % 2) * 3, 10, 2, i % 2 ? style.scene.accent : style.scene.glow);
+    }
+    ctx.globalAlpha = 0.8;
+    px(x - 7, y - 34, 3, 9, actor.ability.color);
+    px(x + 4, y - 34, 3, 9, actor.ability.color);
     ctx.globalAlpha = 1;
   } else if (actor.stasisPulse) {
-    ctx.globalAlpha = 0.3;
-    drawPixelCircle(x, y - 14, 34, actor.ability.color);
+    const wave = (time % 3000) / DEMO_STASIS_PULSE_MS;
+    const radius = Math.floor(DEMO_STASIS_RADIUS * clamp(wave, 0, 1));
+    ctx.globalAlpha = 0.26;
+    drawPixelCircle(x, y - 14, radius, actor.ability.color, actor.ability.accent);
+    ctx.globalAlpha = 0.72;
+    px(x - 2, y - 45, 4, 10, actor.ability.color);
+    px(x - 9, y - 39, 18, 3, actor.ability.accent);
     ctx.globalAlpha = 1;
   } else if (actor.ability?.id === "blink" && actor.phase === "repair") {
-    ctx.globalAlpha = 0.42;
-    px(x - 20, y - 20, 4, 4, "#8a8977");
-    px(x - 25, y - 16, 3, 3, "#bca982");
+    for (let i = 0; i < 4; i += 1) {
+      ctx.globalAlpha = 0.48 - i * 0.08;
+      px(x - 16 - i * 7, y - 22 + i * 3, 5 - (i % 2), 5 - (i % 2), i % 2 ? "#bca982" : "#8a8977");
+    }
+    ctx.globalAlpha = 0.8;
+    px(x + 10, y - 28, 7, 2, actor.ability.color);
+    px(x + 14, y - 31, 3, 8, actor.ability.accent);
     ctx.globalAlpha = 1;
   } else if (actor.ability?.id === "greed" && actor.phase === "repair") {
-    ctx.globalAlpha = 0.5;
-    px(x + 12, y - 28, 6, 6, "#ff6b28");
-    px(x + 14, y - 26, 2, 2, style.css.text);
+    drawGreedMoneyBag(style, actor, x, y, time);
     ctx.globalAlpha = 1;
   }
 
@@ -2647,6 +2774,20 @@ function drawPixelShadow(x, y, phase) {
   ctx.fillStyle = "rgba(0, 0, 0, 0.38)";
   ctx.fillRect(Math.round(x - 9 * shrink), Math.round(y + 3), Math.round(20 * shrink), 4);
   ctx.fillRect(Math.round(x - 5 * shrink), Math.round(y + 6), Math.round(10 * shrink), 2);
+}
+
+function drawGreedMoneyBag(style, actor, x, y, time) {
+  const angle = time / 280 + getStringSeed(actor.member.id) * 0.03;
+  const bagX = x + Math.cos(angle) * 18;
+  const bagY = y - 24 + Math.sin(angle) * 8;
+  ctx.globalAlpha = 0.88;
+  px(bagX - 4, bagY - 5, 8, 8, "#8a5a21");
+  px(bagX - 3, bagY - 8, 6, 3, "#d5983b");
+  px(bagX - 2, bagY - 2, 4, 1, style.css.text);
+  px(bagX - 1, bagY - 4, 2, 5, "#ffdf6a");
+  ctx.globalAlpha = 0.5;
+  drawPixelCircle(x, y - 18, 24, actor.ability.color);
+  ctx.globalAlpha = 1;
 }
 
 function getSoldierFrames(style, member) {
@@ -2928,7 +3069,8 @@ function render(now) {
   const style = styles[activeStyle];
   const rawElapsed = gameStarted ? now - startedAt : 0;
   const elapsed = sessionState.room ? rawElapsed : rawElapsed * DEMO_TIME_SCALE;
-  const loop = getRoomVisualLoop(getLoopState(elapsed));
+  const baseLoop = getLoopState(elapsed);
+  const loop = sessionState.room ? getRoomVisualLoop(baseLoop) : getDemoVisualLoop(baseLoop);
   const demoRoom = sessionState.room ? null : getDemoRoom(loop, now);
   const plantProgress = clamp(loop.elapsed / 7200, 0, 1);
 
