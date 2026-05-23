@@ -196,10 +196,11 @@ const plantPalettes = {
 const LOOP_DURATION = 30000;
 const EXPLOSION_START = 22000;
 const ESCAPE_START = 21200;
-const REBUILD_START = EXPLOSION_START + 1100;
+const REBUILD_START = EXPLOSION_START + 2800;
 const REBUILD_END = LOOP_DURATION;
 const DEMO_TIME_SCALE = 1;
 const DEMO_REPAIR_DURATION = 20000;
+const DEMO_MAX_REPAIR_ELAPSED = 30000;
 const DEMO_NODE_SPAWN_MS = 2000;
 const DEMO_INITIAL_NODE_COUNT = 20;
 const DEMO_RUNNER_SPEED = 2.15;
@@ -211,8 +212,8 @@ const DEMO_NODE_TIMER_FACTOR_MS = 900;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_RED_EXCLUSION_RADIUS = DEMO_BLAST.radius + 13;
-const DEMO_SUMMARY_START = EXPLOSION_START + 650;
-const DEMO_VORTEX_START = LOOP_DURATION - 1200;
+const DEMO_SUMMARY_START = EXPLOSION_START + 450;
+const DEMO_VORTEX_START = LOOP_DURATION - 900;
 const DEMO_PATH_POINTS = [
   { x: 0, y: 354 },
   { x: 118, y: 310 },
@@ -324,6 +325,7 @@ const soldierFrameCache = {};
 const demoVisibleNodeCache = new Map();
 const demoNodePlanCache = new Map();
 const demoDetonationCache = new Map();
+const demoEscapeStartCache = new Map();
 const audioState = {
   context: null,
   master: null,
@@ -335,6 +337,7 @@ const audioState = {
   explosionCycle: -1,
   demoAbilityCueCycle: -1,
   demoAbilityCueKeys: new Set(),
+  demoAbilityCueCounts: {},
 };
 const sessionState = {
   user: null,
@@ -411,6 +414,7 @@ function replay() {
   audioState.explosionCycle = -1;
   audioState.demoAbilityCueCycle = -1;
   audioState.demoAbilityCueKeys.clear();
+  audioState.demoAbilityCueCounts = {};
 }
 
 function startGame() {
@@ -438,7 +442,7 @@ async function unlockAudio() {
   if (!audioState.context) {
     audioState.context = new AudioContext();
     audioState.master = audioState.context.createGain();
-    audioState.master.gain.value = 0.32;
+    audioState.master.gain.value = 0.44;
     audioState.master.connect(audioState.context.destination);
   }
 
@@ -559,35 +563,40 @@ function playDemoAbilitySound(abilityId) {
 
   const start = audio.currentTime;
   if (abilityId === "boost") {
-    playSquareTone(220, start, 0.045, 0.055);
-    playSquareTone(330, start + 0.036, 0.05, 0.052);
+    playSquareTone(180, start, 0.075, 0.1);
+    playSquareTone(360, start + 0.045, 0.09, 0.09);
+    playSquareTone(540, start + 0.105, 0.06, 0.07);
     return;
   }
   if (abilityId === "magnet") {
-    playSquareTone(150, start, 0.11, 0.05);
-    playSquareTone(118, start + 0.045, 0.1, 0.04);
+    playSquareTone(128, start, 0.18, 0.11);
+    playSquareTone(192, start + 0.055, 0.16, 0.08);
+    playSquareTone(96, start + 0.12, 0.12, 0.07);
     return;
   }
   if (abilityId === "stasis") {
-    playSquareTone(1320, start, 0.035, 0.06);
-    playSquareTone(660, start + 0.04, 0.055, 0.048);
+    playSquareTone(1560, start, 0.045, 0.12);
+    playSquareTone(780, start + 0.045, 0.08, 0.1);
+    playSquareTone(390, start + 0.115, 0.08, 0.075);
     return;
   }
   if (abilityId === "warp") {
-    playSquareTone(520, start, 0.045, 0.055);
-    playSquareTone(780, start + 0.035, 0.045, 0.052);
-    playSquareTone(1040, start + 0.07, 0.04, 0.045);
+    playSquareTone(420, start, 0.055, 0.1);
+    playSquareTone(840, start + 0.045, 0.065, 0.11);
+    playSquareTone(1260, start + 0.095, 0.055, 0.09);
     return;
   }
   if (abilityId === "greed") {
-    playSquareTone(980, start, 0.035, 0.052);
-    playSquareTone(1470, start + 0.052, 0.035, 0.045);
+    playSquareTone(980, start, 0.055, 0.12);
+    playSquareTone(1470, start + 0.06, 0.055, 0.1);
+    playSquareTone(1960, start + 0.12, 0.045, 0.07);
   }
 }
 
 function cueDemoAbilitySound(key, abilityId) {
   if (audioState.demoAbilityCueKeys.has(key)) return;
   audioState.demoAbilityCueKeys.add(key);
+  audioState.demoAbilityCueCounts[abilityId] = (audioState.demoAbilityCueCounts[abilityId] || 0) + 1;
   playDemoAbilitySound(abilityId);
 }
 
@@ -609,35 +618,34 @@ function updateDemoAudio(style, loop, time) {
   if (audioState.demoAbilityCueCycle !== loop.cycle) {
     audioState.demoAbilityCueCycle = loop.cycle;
     audioState.demoAbilityCueKeys.clear();
+    audioState.demoAbilityCueCounts = {};
+  }
+
+  if (isDemoDetonated(loop)) {
+    if (audioState.explosionCycle !== loop.cycle && loop.elapsed < EXPLOSION_START + 1350) {
+      playExplosionSound(style);
+      audioState.explosionCycle = loop.cycle;
+    }
+    return;
   }
 
   const actors = squad.map((member, index) => getDemoActorState(member, index, loop, time)).filter(Boolean);
-  const movingActors = actors.filter((actor) => actor.phase === "repair" || actor.phase === "escape");
-
-  if (movingActors.length > 0 && time >= audioState.nextStepAt) {
-    const escaping = movingActors.some((actor) => actor.phase === "escape");
-    playFootstepSound(movingActors.length, escaping ? "escape" : "repair");
-    audioState.nextStepAt = time + (escaping ? 108 : 145) - Math.min(32, movingActors.length * 6);
-  }
+  const repairElapsed = getDemoRepairElapsed(loop);
 
   for (const actor of actors) {
     const abilityId = actor.ability?.id;
     if (!abilityId || actor.phase !== "repair") continue;
     if (abilityId === "boost") {
-      cueDemoAbilitySound(`${loop.cycle}:boost:${actor.member.id}:${Math.floor(loop.elapsed / 2600)}`, abilityId);
-    } else if (abilityId === "warp" && loop.elapsed % 1800 < 180) {
-      cueDemoAbilitySound(`${loop.cycle}:warp:${actor.member.id}:${Math.floor(loop.elapsed / 1800)}`, abilityId);
+      cueDemoAbilitySound(`${loop.cycle}:boost:${actor.member.id}:${Math.floor(repairElapsed / 2600)}`, abilityId);
+    } else if (abilityId === "warp" && actor.warpHopActive && repairElapsed % 1800 < 180) {
+      cueDemoAbilitySound(`${loop.cycle}:warp:${actor.member.id}:${Math.floor(repairElapsed / 1800)}`, abilityId);
     } else if (abilityId === "stasis" && actor.stasisPulse) {
-      cueDemoAbilitySound(`${loop.cycle}:stasis:${actor.member.id}:${Math.floor(loop.elapsed / 3000)}`, abilityId);
+      cueDemoAbilitySound(`${loop.cycle}:stasis:${actor.member.id}:${Math.floor(repairElapsed / 3000)}`, abilityId);
     } else if ((abilityId === "greed" || abilityId === "magnet") && actor.activeNode) {
       cueDemoAbilitySound(`${loop.cycle}:${abilityId}:${actor.member.id}:${actor.activeNode.id}`, abilityId);
     }
   }
 
-  if (audioState.explosionCycle !== loop.cycle && loop.elapsed >= EXPLOSION_START && loop.elapsed < EXPLOSION_START + 1350) {
-    playExplosionSound(style);
-    audioState.explosionCycle = loop.cycle;
-  }
 }
 
 function clamp(value, min, max) {
@@ -684,44 +692,61 @@ function getDemoCycleDuration(cycle) {
   return getDemoDetonationElapsed(cycle) + (REBUILD_END - EXPLOSION_START);
 }
 
+function getDemoRepairElapsed(loop) {
+  const detonationElapsed = Number.isFinite(loop.detonationElapsed) ? loop.detonationElapsed : getDemoDetonationElapsed(loop.cycle);
+  return Math.min(loop.rawElapsed ?? loop.elapsed, detonationElapsed);
+}
+
+function isDemoDetonated(loop) {
+  const detonationElapsed = Number.isFinite(loop.detonationElapsed) ? loop.detonationElapsed : getDemoDetonationElapsed(loop.cycle);
+  return Boolean(loop.detonated) || (loop.rawElapsed ?? loop.elapsed) >= detonationElapsed;
+}
+
 function getDemoCountdownMs(loop) {
-  return getDemoCountdownMsForElapsed(loop.cycle, loop.elapsed);
+  return getDemoCountdownMsForElapsed(loop.cycle, getDemoRepairElapsed(loop));
 }
 
 function getDemoCountdownMsForElapsed(cycle, elapsed) {
-  if (elapsed >= EXPLOSION_START) return 0;
   const nodeDeltaMs = getDemoNodeTimerDeltaMs(cycle, elapsed);
-  return Math.max(0, DEMO_REPAIR_DURATION - elapsed + nodeDeltaMs);
+  return Math.max(0, Math.min(DEMO_REPAIR_DURATION - elapsed + nodeDeltaMs, EXPLOSION_START - elapsed));
 }
 
 function getDemoNodeTimerDeltaMs(cycle, elapsed) {
-  const probeLoop = { cycle, elapsed };
-  return getDemoNodeStates(probeLoop).reduce((sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum), 0);
+  const probeLoop = { cycle, elapsed, rawElapsed: elapsed, detonationElapsed: DEMO_MAX_REPAIR_ELAPSED };
+  return getDemoNodeStates(probeLoop, Date.now(), null, getDemoVisibleNodes(cycle, elapsed), { ignoreEscape: true }).reduce(
+    (sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum),
+    0,
+  );
 }
 
 function getDemoDetonationElapsed(cycle) {
   if (demoDetonationCache.has(cycle)) return demoDetonationCache.get(cycle);
-  let detonationElapsed = EXPLOSION_START;
-  for (let elapsed = 0; elapsed <= EXPLOSION_START; elapsed += 100) {
-    if (getDemoCountdownMsForElapsed(cycle, elapsed) <= 0) {
-      detonationElapsed = elapsed;
-      break;
-    }
-  }
+  const detonationElapsed = EXPLOSION_START;
   demoDetonationCache.set(cycle, detonationElapsed);
   return detonationElapsed;
 }
 
 function getDemoVisualLoop(loop) {
   const detonationElapsed = getDemoDetonationElapsed(loop.cycle);
-  if (loop.elapsed < detonationElapsed) return loop;
+  if (loop.elapsed < detonationElapsed) {
+    return {
+      ...loop,
+      rawElapsed: loop.elapsed,
+      elapsed: Math.min(loop.elapsed, EXPLOSION_START - 1),
+      detonationElapsed,
+      detonated: false,
+    };
+  }
   const shiftedElapsed = EXPLOSION_START + (loop.elapsed - detonationElapsed);
   const rebuildProgress = clamp((shiftedElapsed - REBUILD_START) / (REBUILD_END - REBUILD_START), 0, 1);
   return {
     ...loop,
+    rawElapsed: detonationElapsed,
     elapsed: shiftedElapsed,
     rebuildProgress,
     upgradeLevel: Math.min(3, loop.cycle + rebuildProgress),
+    detonationElapsed,
+    detonated: true,
   };
 }
 
@@ -850,21 +875,21 @@ function getDemoHoldDurationMs(node, ability) {
   return Math.max(minimumHold, Math.round(node.holdMs * abilityFactor));
 }
 
-function getDemoRouteState(member, index, cycle, elapsed) {
+function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
   const ability = getDemoAbility(member, cycle);
   const escapeThreshold = getDemoEscapeThresholdMs(ability);
-  const escapeStart = Math.max(0, EXPLOSION_START - escapeThreshold);
+  const escapeStart = options.ignoreEscape ? Number.POSITIVE_INFINITY : getDemoEscapeStartElapsed(cycle, escapeThreshold);
   const targets = getDemoNodePlan(member, index, cycle);
 
-  if (elapsed >= escapeStart) {
-    const start = getDemoRouteState(member, index, cycle, escapeStart - 1);
+  if (!options.ignoreEscape && elapsed >= escapeStart) {
+    const start = getDemoRouteState(member, index, cycle, escapeStart - 1, options);
     const progress = easeInOut(clamp((elapsed - escapeStart) / escapeThreshold, 0, 1));
     return {
       ...getPointOnPath([start, member.escape], progress),
       phase: "escape",
       activeNode: null,
       holdRemainingMs: 0,
-      repairedNodeIds: getDemoCompletedRouteNodeIds(member, index, cycle, escapeStart - 1),
+      repairedNodeIds: getDemoCompletedRouteNodeIds(member, index, cycle, escapeStart - 1, options),
     };
   }
 
@@ -917,22 +942,37 @@ function getDemoRouteState(member, index, cycle, elapsed) {
   };
 }
 
+function getDemoEscapeStartElapsed(cycle, escapeThreshold) {
+  const cacheKey = `${cycle}:${Math.round(escapeThreshold)}`;
+  if (demoEscapeStartCache.has(cacheKey)) return demoEscapeStartCache.get(cacheKey);
+  const detonationElapsed = getDemoDetonationElapsed(cycle);
+  for (let elapsed = 0; elapsed <= detonationElapsed; elapsed += 100) {
+    if (getDemoCountdownMsForElapsed(cycle, elapsed) <= escapeThreshold) {
+      demoEscapeStartCache.set(cacheKey, elapsed);
+      return elapsed;
+    }
+  }
+  const fallback = Math.max(0, detonationElapsed - escapeThreshold);
+  demoEscapeStartCache.set(cacheKey, fallback);
+  return fallback;
+}
+
 function getDemoPlayPosition(member, index, cycle, elapsed) {
   return getDemoRouteState(member, index, cycle, elapsed);
 }
 
-function getDemoCompletedRouteNodeIds(member, index, cycle, elapsed) {
-  return getDemoRouteState(member, index, cycle, elapsed).repairedNodeIds || [];
+function getDemoCompletedRouteNodeIds(member, index, cycle, elapsed, options = {}) {
+  return getDemoRouteState(member, index, cycle, elapsed, options).repairedNodeIds || [];
 }
 
 function getDemoDetonationPosition(member, index, cycle) {
-  return getDemoPlayPosition(member, index, cycle, EXPLOSION_START - 1);
+  return getDemoPlayPosition(member, index, cycle, getDemoDetonationElapsed(cycle) - 1);
 }
 
 function getDemoRoundScore(member, index, loop) {
   const ability = getDemoAbility(member, loop.cycle);
   const greedBonus = ability.id === "greed" ? 1.25 : 1;
-  const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, Math.min(loop.elapsed, EXPLOSION_START - 1)));
+  const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, Math.min(getDemoRepairElapsed(loop), getDemoDetonationElapsed(loop.cycle) - 1)));
   const repaired = demoNodes.filter((node) => repairedIds.has(node.id));
   return repaired.reduce((score, node) => score + node.value * greedBonus, 0);
 }
@@ -941,35 +981,41 @@ function getDemoPlayerOutcome(member, index, loop) {
   const position = getDemoDetonationPosition(member, index, loop.cycle);
   const caught = Math.hypot(position.x - DEMO_BLAST.x, position.y - DEMO_BLAST.y) <= DEMO_BLAST.radius;
   const roundScore = getDemoRoundScore(member, index, loop);
+  const detonated = isDemoDetonated(loop);
   return {
     caught,
-    roundScore: caught && loop.elapsed >= EXPLOSION_START ? 0 : roundScore,
+    roundScore: caught && detonated ? 0 : roundScore,
     storedRoundScore: roundScore,
-    state: caught && loop.elapsed >= EXPLOSION_START ? "incapacitated" : "alive",
+    state: caught && detonated ? "incapacitated" : "alive",
   };
 }
 
 function getDemoActorState(member, index, loop, time) {
   const ability = getDemoAbility(member, loop.cycle);
-  const stasisSources = getDemoStasisPulseSources(loop.elapsed, loop.cycle);
-  const currentPosition = getDemoPlayPosition(member, index, loop.cycle, loop.elapsed);
+  const repairElapsed = getDemoRepairElapsed(loop);
+  const detonated = isDemoDetonated(loop);
+  const stasisSources = getDemoStasisPulseSources(repairElapsed, loop.cycle);
+  const currentPosition = getDemoPlayPosition(member, index, loop.cycle, repairElapsed);
   const frozen =
     ability.id !== "stasis" &&
-    loop.elapsed < EXPLOSION_START &&
+    !detonated &&
     stasisSources.some((source) => Math.hypot(source.x - currentPosition.x, source.y - currentPosition.y) <= DEMO_STASIS_RADIUS);
 
-  if (loop.elapsed < EXPLOSION_START) {
-    const warpHop = ability.id === "warp" && loop.elapsed % 1800 < 320 ? 0.18 : 0;
-    const adjustedElapsed = Math.max(0, loop.elapsed + warpHop * 2400 - (frozen ? 850 : 0));
-    const position = getDemoPlayPosition(member, index, loop.cycle, adjustedElapsed);
+  if (!detonated) {
+    const adjustedElapsed = Math.max(0, repairElapsed - (frozen ? 850 : 0));
+    const basePosition = getDemoPlayPosition(member, index, loop.cycle, adjustedElapsed);
+    const warped = ability.id === "warp" && !frozen ? applyDemoWarpHop(member, index, loop.cycle, adjustedElapsed, basePosition) : null;
+    const position = warped?.position || basePosition;
     return {
       ...position,
       member,
       ability,
       phase: frozen ? "frozen" : "repair",
       stasisPulse: stasisSources.some((source) => source.memberId === member.id),
+      skillCooldown: ability.id === "stasis" ? 1 - (repairElapsed % 3000) / 3000 : null,
+      warpHopActive: Boolean(warped?.active),
       frozenUntil: frozen ? time + 1000 : 0,
-      progress: clamp(loop.elapsed / EXPLOSION_START, 0, 1),
+      progress: clamp(repairElapsed / getDemoDetonationElapsed(loop.cycle), 0, 1),
       step: frozen || position.phase === "claim" ? 0 : Math.floor((time + index * 80) / (ability.id === "boost" ? 80 : 110)) % 2,
       fade: 1,
       dissolve: 0,
@@ -1019,6 +1065,28 @@ function getDemoActorState(member, index, loop, time) {
   };
 }
 
+function applyDemoWarpHop(member, index, cycle, elapsed, position) {
+  const phaseElapsed = elapsed % 1800;
+  if (phaseElapsed >= 320 || position.phase !== "move") return { position, active: false };
+
+  const future = getDemoPlayPosition(member, index, cycle, elapsed + 260);
+  const dx = future.x - position.x;
+  const dy = future.y - position.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 0.5) return { position, active: false };
+
+  const pulse = Math.sin((phaseElapsed / 320) * Math.PI);
+  const hopDistance = 34 * pulse;
+  return {
+    active: true,
+    position: {
+      ...position,
+      x: position.x + (dx / distance) * hopDistance,
+      y: position.y + (dy / distance) * hopDistance,
+    },
+  };
+}
+
 function isDemoStasisPulseActive(elapsed, cycle) {
   return getDemoStasisPulseSources(elapsed, cycle).length > 0;
 }
@@ -1037,6 +1105,8 @@ function getDemoStasisPulseSources(elapsed, cycle) {
 function getDemoRoom(loop, time) {
   if (sessionState.room) return sessionState.room;
   const now = Date.now();
+  const repairElapsed = getDemoRepairElapsed(loop);
+  const detonated = isDemoDetonated(loop);
   const actors = squad.map((member, index) => getDemoActorState(member, index, loop, time)).filter(Boolean);
   const players = {};
   for (const actor of actors) {
@@ -1055,32 +1125,34 @@ function getDemoRoom(loop, time) {
     };
   }
 
-  const visibleNodes = getDemoVisibleNodes(loop.cycle, loop.elapsed);
+  const visibleNodes = getDemoVisibleNodes(loop.cycle, repairElapsed);
   const nodes = getDemoNodeStates(loop, now, actors, visibleNodes);
   const nodeTimerDeltaMs = nodes.reduce((sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum), 0);
-  const countdownEndsAt = now + Math.max(0, DEMO_REPAIR_DURATION - loop.elapsed + nodeTimerDeltaMs);
+  const countdownEndsAt = now + getDemoCountdownMs(loop);
 
   return {
-    phase: loop.elapsed >= EXPLOSION_START ? "explosion" : "repair",
+    phase: detonated ? "explosion" : "repair",
     countdownEndsAt,
-    phaseStartedAt: now - loop.elapsed,
+    phaseStartedAt: now - repairElapsed,
     blast: DEMO_BLAST,
     nodes,
     nodeTimerDeltaMs,
     repairedNodeCount: nodes.filter((node) => node.repaired).length,
     players,
     summary: getDemoSummary(loop),
-    skillStats: getDemoSkillStats(loop),
+    skillStats: getDemoSkillStats(loop, actors),
     targetPlayerCount: squad.length,
   };
 }
 
-function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes = getDemoVisibleNodes(loop.cycle, loop.elapsed)) {
+function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes = getDemoVisibleNodes(loop.cycle, getDemoRepairElapsed(loop)), options = {}) {
+  const repairElapsed = getDemoRepairElapsed(loop);
+  const detonationElapsed = options.ignoreEscape ? DEMO_MAX_REPAIR_ELAPSED : getDemoDetonationElapsed(loop.cycle);
   const actorRoutes = squad.map((member, index) => ({
     member,
     index,
     ability: getDemoAbility(member, loop.cycle),
-    route: getDemoRouteState(member, index, loop.cycle, Math.min(loop.elapsed, EXPLOSION_START - 1)),
+    route: getDemoRouteState(member, index, loop.cycle, Math.min(repairElapsed, detonationElapsed - 1), options),
   }));
   const activeActors = actors || actorRoutes.map(({ member, index, ability, route }) => ({ ...route, member, ability, id: member.id, index }));
   const repairedNodeIds = new Set(actorRoutes.flatMap((entry) => entry.route.repairedNodeIds || []));
@@ -1128,8 +1200,9 @@ function getDemoSummary(loop) {
   });
 }
 
-function getDemoSkillStats(loop) {
-  const elapsed = Math.min(loop.elapsed, EXPLOSION_START - 1);
+function getDemoSkillStats(loop, actors = null) {
+  const elapsed = Math.min(getDemoRepairElapsed(loop), getDemoDetonationElapsed(loop.cycle) - 1);
+  const activeAbilityIds = actors ? new Set(actors.map((actor) => actor.ability?.id).filter(Boolean)) : null;
   const stats = {
     boost: { label: "BOOST", count: 0, detail: "speed blips" },
     magnet: { label: "MAG", count: 0, detail: "remote claims" },
@@ -1140,10 +1213,11 @@ function getDemoSkillStats(loop) {
 
   for (const [index, member] of squad.entries()) {
     const ability = getDemoAbility(member, loop.cycle);
+    if (activeAbilityIds && !activeAbilityIds.has(ability.id)) continue;
     if (ability.id === "boost") {
-      stats.boost.count += Math.max(0, Math.floor(elapsed / 2600));
+      stats.boost.count += countDemoMovingWindows(member, index, loop.cycle, elapsed, 2600, 500);
     } else if (ability.id === "warp") {
-      stats.warp.count += Math.max(0, Math.floor(elapsed / 1800));
+      stats.warp.count += countDemoMovingWindows(member, index, loop.cycle, elapsed, 1800, 320);
     } else if (ability.id === "magnet") {
       const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, elapsed));
       stats.magnet.count += demoNodes.filter((node) => repairedIds.has(node.id)).length;
@@ -1160,6 +1234,7 @@ function getDemoSkillStats(loop) {
     for (const source of sources) {
       for (const [index, member] of squad.entries()) {
         const ability = getDemoAbility(member, loop.cycle);
+        if (activeAbilityIds && !activeAbilityIds.has(ability.id)) continue;
         if (ability.id === "stasis") continue;
         const position = getDemoPlayPosition(member, index, loop.cycle, pulseElapsed);
         if (Math.hypot(source.x - position.x, source.y - position.y) <= DEMO_STASIS_RADIUS) {
@@ -1170,6 +1245,16 @@ function getDemoSkillStats(loop) {
   }
 
   return stats;
+}
+
+function countDemoMovingWindows(member, index, cycle, elapsed, intervalMs, activeMs) {
+  let count = 0;
+  for (let windowStart = 0; windowStart <= elapsed; windowStart += intervalMs) {
+    const sampleElapsed = Math.min(elapsed, windowStart + Math.floor(activeMs / 2));
+    const route = getDemoRouteState(member, index, cycle, sampleElapsed);
+    if (route.phase === "move") count += 1;
+  }
+  return count;
 }
 
 function getPointOnPath(points, progress) {
@@ -2530,22 +2615,31 @@ function drawDemoAbilityTag(style, actor, room) {
   const label = actor.ability.label;
   const claimNode = room?.nodes?.find((node) => node.claimedBy === actor.member.id && !node.repaired && node.claimEndsAt);
   const claimLabel = claimNode ? `CLAIM ${formatHoldLabel(claimNode.claimEndsAt - Date.now())}` : "";
-  const width = Math.min(74, Math.max(label.length * 6 + 18, claimLabel.length * 5 + 8));
-  const height = claimLabel ? 22 : 13;
+  const hasCooldown = actor.ability.id === "stasis" && Number.isFinite(actor.skillCooldown);
+  const width = Math.min(82, Math.max(label.length * 6 + 18, claimLabel.length * 5 + 8, hasCooldown ? 56 : 0));
+  const height = (claimLabel ? 22 : 13) + (hasCooldown ? 6 : 0);
   const left = x - Math.floor(width / 2);
-  const top = y - 36 - (claimLabel ? 8 : 0);
+  const top = y - 36 - (claimLabel ? 8 : 0) - (hasCooldown ? 4 : 0);
   px(left, top, width, height, "rgba(0, 0, 0, 0.84)");
-  px(left, y - 36, width, 2, actor.ability.color);
-  drawAbilityIcon(actor.ability, left + 3, y - 33, 8);
+  px(left, top, width, 2, actor.ability.color);
+  drawAbilityIcon(actor.ability, left + 3, top + 3, 8);
   ctx.fillStyle = style.css.text;
   ctx.font = "7px monospace";
-  ctx.fillText(label, left + 15, y - 26);
+  ctx.fillText(label, left + 15, top + 11);
+  if (hasCooldown) {
+    const barWidth = width - 8;
+    const barY = top + 15;
+    px(left + 4, barY, barWidth, 3, "rgba(241, 232, 207, 0.22)");
+    px(left + 4, barY, Math.max(1, Math.round(barWidth * actor.skillCooldown)), 3, actor.ability.color);
+    px(left + 4 + Math.round(barWidth * actor.skillCooldown), barY - 1, 2, 5, style.css.text);
+  }
   if (claimLabel) {
     const progress = clamp((claimNode.claimEndsAt - Date.now()) / (claimNode.claimDurationMs || claimNode.holdMs), 0, 1);
-    px(left + 3, top + 4, Math.max(3, Math.round((width - 6) * (1 - progress))), 2, actor.ability.color);
+    const claimY = top + (hasCooldown ? 21 : 4);
+    px(left + 3, claimY, Math.max(3, Math.round((width - 6) * (1 - progress))), 2, actor.ability.color);
     ctx.fillStyle = style.css.text;
     ctx.font = "6px monospace";
-    ctx.fillText(claimLabel, left + 4, top + 12);
+    ctx.fillText(claimLabel, left + 4, claimY + 8);
   }
 }
 
@@ -2745,20 +2839,37 @@ function drawRoomHud(style) {
 
 function drawDemoHud(style, room, loop) {
   if (!room || room.phase !== "repair") return;
-  const panelHeight = 36 + squad.length * 10;
-  px(8, 8, 258, panelHeight, "rgba(0, 0, 0, 0.66)");
-  px(8, 8, 258, 3, style.scene.accent);
+  const panelHeight = 102;
+  const panelWidth = 352;
+  const dividerX = 132;
+  px(8, 8, panelWidth, panelHeight, "rgba(0, 0, 0, 0.66)");
+  px(8, 8, panelWidth, 3, style.scene.accent);
+  px(dividerX, 14, 1, panelHeight - 18, "rgba(241, 232, 207, 0.2)");
   ctx.fillStyle = style.css.text;
   ctx.font = "8px monospace";
   ctx.fillText(`DEMO TIMER ${getDemoCountdownLabel(loop)}s`, 14, 21);
+
   ctx.font = "6px monospace";
+  ctx.fillStyle = style.css.muted;
+  ctx.fillText("SKILLS", 14, 34);
+  for (let i = 0; i < demoAbilities.length; i += 1) {
+    const ability = demoAbilities[i];
+    const y = 47 + i * 9;
+    drawAbilityIcon(ability, 15, y - 7, 7);
+    ctx.fillStyle = style.css.text;
+    ctx.fillText(`${ability.label}`, 27, y);
+  }
+
+  ctx.fillStyle = style.css.muted;
+  ctx.fillText("RUNNERS", dividerX + 10, 34);
   for (let i = 0; i < squad.length; i += 1) {
     const member = squad[i];
     const ability = getDemoAbility(member, loop.cycle);
-    const y = 36 + i * 10;
-    drawAbilityIcon(ability, 15, y - 8, 8);
+    const y = 47 + i * 8;
+    const score = getDemoRoundScore(member, i, loop);
+    drawAbilityIcon(ability, dividerX + 12, y - 7, 7);
     ctx.fillStyle = style.css.text;
-    ctx.fillText(`${ability.label.padEnd(6, " ")} ${member.id.toUpperCase()} ${ability.name}`, 28, y);
+    ctx.fillText(`${member.id.slice(0, 7).toUpperCase().padEnd(7, " ")} ${score >= 0 ? "+" : ""}${formatScore(score)}`, dividerX + 24, y);
   }
 }
 
@@ -3362,7 +3473,8 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
     })),
     playerCount: players.length,
     frozenCount: players.filter((player) => player.state === "frozen").length,
-    skillStats: getDemoSkillStats(loop),
+    skillStats: getDemoSkillStats(loop, Object.values(room.players || {}).map((player) => ({ ability: player.ability }))),
+    audioCueCounts: { ...audioState.demoAbilityCueCounts },
     demoOnlyAbilityIds: [...DEMO_ONLY_ABILITY_IDS],
     playerAbilities: players.map((player) => player.ability?.id).filter(Boolean),
     routePlans,
@@ -3371,6 +3483,12 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
 
 window.__POWER_PLANT_DEMO_DEBUG__ = {
   getSnapshotAt: getDemoMechanicsSnapshot,
+  getAudioDebug: () => ({
+    enabled: audioState.enabled,
+    unlocked: audioState.unlocked,
+    contextState: audioState.context?.state || "missing",
+    cueCounts: { ...audioState.demoAbilityCueCounts },
+  }),
   demoOnlyAbilityIds: [...DEMO_ONLY_ABILITY_IDS],
   timings: {
     nominalLoopDuration: LOOP_DURATION,
