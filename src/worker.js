@@ -29,6 +29,7 @@ const WORLD_HEIGHT = 432;
 const BLAST_CENTER = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 };
 const BLAST_RADIUS_BASE = 115;
 const BLAST_RADIUS_JITTER = 13;
+const NODE_RED_EXCLUSION_RADIUS = BLAST_RADIUS_BASE + BLAST_RADIUS_JITTER;
 const MAX_PLAYERS = 4;
 const BOT_ID = "bot-1";
 const BOT_TICK_MS = 90;
@@ -776,11 +777,15 @@ function assertNodeSpacing(nodes) {
 }
 
 function nodeValue(node, bonus = false) {
-  const sign = Math.random() < NODE_NEGATIVE_CHANCE ? -1 : 1;
+  const sign = canNodeBeNegative(node) && Math.random() < NODE_NEGATIVE_CHANCE ? -1 : 1;
   const magnitude = bonus
     ? NODE_BONUS_VALUE_MIN + Math.random() * (NODE_BONUS_VALUE_MAX - NODE_BONUS_VALUE_MIN)
     : regularNodeValue(node);
   return roundValue(magnitude * sign);
+}
+
+function canNodeBeNegative(node) {
+  return Math.hypot(node.x - BLAST_CENTER.x, node.y - BLAST_CENTER.y) > NODE_RED_EXCLUSION_RADIUS;
 }
 
 function regularNodeValue(node) {
@@ -821,6 +826,13 @@ function distanceToNode(player, node) {
 function roundValue(value) {
   return Number(value.toFixed(NODE_VALUE_DECIMALS));
 }
+
+export const __ROOM_MECHANICS_DEBUG__ = {
+  cloneNodes,
+  center: BLAST_CENTER,
+  redExclusionRadius: NODE_RED_EXCLUSION_RADIUS,
+  regularNodeValue,
+};
 
 function makeBlast() {
   return {

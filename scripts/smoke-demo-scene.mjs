@@ -1,0 +1,196 @@
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+installBrowserStubs();
+
+await import(`${pathToFileURL(`${process.cwd()}/main.js`).href}?smoke=${Date.now()}`);
+const { __ROOM_MECHANICS_DEBUG__: roomMechanics } = await import(`../src/worker.js?smoke=${Date.now()}`);
+
+const debug = globalThis.window.__POWER_PLANT_DEMO_DEBUG__;
+assert(debug, "demo debug API was not registered");
+
+const timings = debug.timings;
+assert(timings.vortexStart - timings.rebuildStart >= 4_000, "rebuild window is too short to see");
+assert(timings.rebuildEnd - timings.vortexStart <= 1_500, "vortex transition is too long");
+
+const demoOnlyIds = new Set(debug.demoOnlyAbilityIds);
+for (const id of ["boost", "magnet", "stasis", "warp", "greed"]) {
+  assert(demoOnlyIds.has(id), `${id} was not marked demo-only`);
+}
+assert(!demoOnlyIds.has("blink"), "old blink ability is still registered");
+
+const workerSource = readFileSync("src/worker.js", "utf8");
+for (const id of demoOnlyIds) {
+  assert(!workerSource.includes(`"${id}"`) && !workerSource.includes(`'${id}'`), `${id} leaked into server gameplay`);
+}
+
+const opening = debug.getSnapshotAt(0, 0);
+assert(opening.nodeCount === 20, `expected 20 initial demo nodes, got ${opening.nodeCount}`);
+assert(opening.playerCount === 8, `expected 8 demo players, got ${opening.playerCount}`);
+assert(opening.playerAbilities.every((id) => demoOnlyIds.has(id)), "demo player had a non-demo ability");
+
+const firstTargets = opening.routePlans.map((plan) => plan.targets[0]).filter(Boolean);
+assert(new Set(firstTargets).size >= Math.min(6, firstTargets.length), "route planner bunched too many first targets");
+assertNodeValueRules(opening.nodes, 128, "demo opening");
+
+const repairSamples = [];
+for (let elapsed = 1_000; elapsed < timings.explosionStart; elapsed += 500) {
+  repairSamples.push(debug.getSnapshotAt(elapsed, elapsed));
+}
+assert(repairSamples.some((sample) => sample.claimedNodeCount > 0), "no node was claimed during demo repair");
+assert(repairSamples.some((sample) => sample.repairedNodeCount > 0), "no node was repaired during demo repair");
+assert(repairSamples.some((sample) => Math.abs(sample.nodeTimerDeltaMs) > 0), "demo node repairs never affected the plant timer");
+assert(repairSamples.some((sample) => sample.frozenCount > 0), "stasis never froze a demo player");
+const skillStats = repairSamples.at(-1).skillStats;
+assert(skillStats?.stasis?.count > 0, "stasis skill log never recorded frozen players");
+assert(skillStats?.warp?.count > 0, "warp skill log never recorded portal hops");
+assert(skillStats?.greed?.count > 0, "greed skill log never recorded rich snaps");
+
+const fullDemoNodeSet = debug.getSnapshotAt(10_000, 10_000).nodes;
+assertNodeValueRules(fullDemoNodeSet, 128, "demo full");
+
+for (let i = 0; i < 20; i += 1) {
+  assertNodeValueRules(roomMechanics.cloneNodes(), roomMechanics.redExclusionRadius, `gameplay room ${i + 1}`);
+}
+
+const stages = new Set();
+for (let elapsed = 0; elapsed < timings.firstLoopDuration; elapsed += 250) {
+  stages.add(debug.getSnapshotAt(elapsed, elapsed).stage);
+}
+assert(stages.has("blast"), "blast stage missing after detonation");
+assert(stages.has("rebuild"), "rebuild stage missing after blast");
+assert(stages.has("vortex"), "vortex stage missing near loop boundary");
+
+const nextLoop = debug.getSnapshotAt(timings.firstLoopDuration + 500);
+assert(nextLoop.cycle === 1, "demo did not advance to next loop");
+assert(nextLoop.stage === "repair", "next demo loop did not restart in repair stage");
+
+console.log("demo scene smoke passed");
+
+function installBrowserStubs() {
+  const elements = new Map();
+  const canvas = makeCanvas();
+  const styleButtons = ["steampunk", "cyberpunk", "futuristic"].map((style) => makeElement({ dataset: { style } }));
+
+  globalThis.window = {
+    location: { href: "http://127.0.0.1:8799/", pathname: "/", search: "", protocol: "http:", host: "127.0.0.1:8799" },
+    history: { pushState() {}, replaceState() {} },
+    addEventListener() {},
+    AudioContext: null,
+    webkitAudioContext: null,
+    prompt() {},
+  };
+  globalThis.document = {
+    documentElement: makeElement(),
+    querySelector(selector) {
+      if (selector === "#game-canvas") return canvas;
+      if (!elements.has(selector)) elements.set(selector, makeElement());
+      return elements.get(selector);
+    },
+    querySelectorAll(selector) {
+      if (selector === ".style-button") return styleButtons;
+      return [];
+    },
+    createElement(tagName) {
+      if (tagName === "canvas") return makeCanvas();
+      return makeElement();
+    },
+  };
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { writeText: async () => {} } },
+  });
+  globalThis.WebSocket = class WebSocketStub {
+    static OPEN = 1;
+  };
+  globalThis.requestAnimationFrame = () => 0;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({}),
+  });
+}
+
+function makeElement(overrides = {}) {
+  const classes = new Set();
+  return {
+    dataset: {},
+    style: { setProperty() {} },
+    classList: {
+      add: (...values) => values.forEach((value) => classes.add(value)),
+      remove: (...values) => values.forEach((value) => classes.delete(value)),
+      toggle(value, force) {
+        if (force === true) classes.add(value);
+        else if (force === false) classes.delete(value);
+        else if (classes.has(value)) classes.delete(value);
+        else classes.add(value);
+      },
+      contains: (value) => classes.has(value),
+    },
+    addEventListener() {},
+    setAttribute() {},
+    append() {},
+    replaceChildren() {},
+    querySelector() {
+      return makeElement();
+    },
+    textContent: "",
+    className: "",
+    value: "",
+    checked: false,
+    disabled: false,
+    open: false,
+    ...overrides,
+  };
+}
+
+function makeCanvas() {
+  return {
+    ...makeElement(),
+    width: 768,
+    height: 432,
+    getContext: () => makeContext(),
+  };
+}
+
+function makeContext() {
+  return {
+    imageSmoothingEnabled: false,
+    fillStyle: "",
+    strokeStyle: "",
+    globalAlpha: 1,
+    font: "",
+    save() {},
+    restore() {},
+    translate() {},
+    scale() {},
+    fillRect() {},
+    strokeRect() {},
+    drawImage() {},
+    fillText() {},
+    createLinearGradient: () => ({ addColorStop() {} }),
+    getImageData: () => ({ data: new Uint8ClampedArray(768 * 432 * 4) }),
+  };
+}
+
+function assert(value, message) {
+  if (!value) throw new Error(message);
+}
+
+function assertNodeValueRules(nodes, redExclusionRadius, label) {
+  const positives = nodes.filter((node) => node.value > 0 && !node.bonus);
+  for (const node of nodes) {
+    const distance = node.distanceFromPlant ?? Math.hypot(node.x - roomMechanics.center.x, node.y - roomMechanics.center.y);
+    assert(!(node.value < 0 && distance <= redExclusionRadius), `${label}: red node ${node.id} spawned in plant grid`);
+  }
+
+  for (const closer of positives) {
+    const closerDistance = closer.distanceFromPlant ?? Math.hypot(closer.x - roomMechanics.center.x, closer.y - roomMechanics.center.y);
+    for (const farther of positives) {
+      const fartherDistance = farther.distanceFromPlant ?? Math.hypot(farther.x - roomMechanics.center.x, farther.y - roomMechanics.center.y);
+      if (closerDistance + 16 < fartherDistance) {
+        assert(closer.value >= farther.value, `${label}: green node ${closer.id} is closer but lower value than ${farther.id}`);
+      }
+    }
+  }
+}

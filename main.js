@@ -210,8 +210,9 @@ const DEMO_STASIS_FREEZE_MS = 1000;
 const DEMO_NODE_TIMER_FACTOR_MS = 900;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
+const DEMO_RED_EXCLUSION_RADIUS = DEMO_BLAST.radius + 13;
 const DEMO_SUMMARY_START = EXPLOSION_START + 650;
-const DEMO_VORTEX_START = EXPLOSION_START + 2500;
+const DEMO_VORTEX_START = LOOP_DURATION - 1200;
 const DEMO_PATH_POINTS = [
   { x: 0, y: 354 },
   { x: 118, y: 310 },
@@ -246,14 +247,15 @@ const demoNodes = [
   { id: "dn22", x: 438, y: 398, value: -3.7, size: 8, holdMs: 1700 },
   { id: "dn23", x: 224, y: 168, value: 6.7, size: 10, holdMs: 3100, bonus: true },
   { id: "dn24", x: 632, y: 380, value: 5.9, size: 9, holdMs: 2600 },
-];
+].map(normalizeDemoNode);
 const demoAbilities = [
   { id: "boost", label: "BOOST", name: "Overclock Boots", color: "#70a8ff", accent: "#f1e8cf" },
   { id: "magnet", label: "MAG", name: "Magnet Gloves", color: "#57d56c", accent: "#d7ffd8" },
-  { id: "stasis", label: "FREEZE", name: "Stasis Popper", color: "#9fdfff", accent: "#f1e8cf" },
+  { id: "stasis", label: "STASIS", name: "Stasis Popper", color: "#9fdfff", accent: "#f1e8cf" },
   { id: "warp", label: "WARP", name: "Portal Boots", color: "#d5983b", accent: "#f1e8cf" },
   { id: "greed", label: "GREED", name: "Greedy Wrench", color: "#ff6b28", accent: "#ffe28f" },
 ];
+const DEMO_ONLY_ABILITY_IDS = new Set(demoAbilities.map((ability) => ability.id));
 
 const squad = [
   {
@@ -331,6 +333,8 @@ const audioState = {
   nextStepAt: 0,
   nextHazardAt: 0,
   explosionCycle: -1,
+  demoAbilityCueCycle: -1,
+  demoAbilityCueKeys: new Set(),
 };
 const sessionState = {
   user: null,
@@ -405,6 +409,8 @@ function replay() {
   lastStatus = "";
   audioState.nextStepAt = 0;
   audioState.explosionCycle = -1;
+  audioState.demoAbilityCueCycle = -1;
+  audioState.demoAbilityCueKeys.clear();
 }
 
 function startGame() {
@@ -547,6 +553,44 @@ function playHazardBeep() {
   playSquareTone(440, start + 0.08, 0.06, 0.055);
 }
 
+function playDemoAbilitySound(abilityId) {
+  const audio = audioState.context;
+  if (!audio || !audioState.unlocked || !audioState.enabled) return;
+
+  const start = audio.currentTime;
+  if (abilityId === "boost") {
+    playSquareTone(220, start, 0.045, 0.055);
+    playSquareTone(330, start + 0.036, 0.05, 0.052);
+    return;
+  }
+  if (abilityId === "magnet") {
+    playSquareTone(150, start, 0.11, 0.05);
+    playSquareTone(118, start + 0.045, 0.1, 0.04);
+    return;
+  }
+  if (abilityId === "stasis") {
+    playSquareTone(1320, start, 0.035, 0.06);
+    playSquareTone(660, start + 0.04, 0.055, 0.048);
+    return;
+  }
+  if (abilityId === "warp") {
+    playSquareTone(520, start, 0.045, 0.055);
+    playSquareTone(780, start + 0.035, 0.045, 0.052);
+    playSquareTone(1040, start + 0.07, 0.04, 0.045);
+    return;
+  }
+  if (abilityId === "greed") {
+    playSquareTone(980, start, 0.035, 0.052);
+    playSquareTone(1470, start + 0.052, 0.035, 0.045);
+  }
+}
+
+function cueDemoAbilitySound(key, abilityId) {
+  if (audioState.demoAbilityCueKeys.has(key)) return;
+  audioState.demoAbilityCueKeys.add(key);
+  playDemoAbilitySound(abilityId);
+}
+
 function updateDemoAudio(style, loop, time) {
   if (!audioState.enabled || !audioState.unlocked || !audioState.context) return;
 
@@ -562,6 +606,11 @@ function updateDemoAudio(style, loop, time) {
     return;
   }
 
+  if (audioState.demoAbilityCueCycle !== loop.cycle) {
+    audioState.demoAbilityCueCycle = loop.cycle;
+    audioState.demoAbilityCueKeys.clear();
+  }
+
   const actors = squad.map((member, index) => getDemoActorState(member, index, loop, time)).filter(Boolean);
   const movingActors = actors.filter((actor) => actor.phase === "repair" || actor.phase === "escape");
 
@@ -569,6 +618,20 @@ function updateDemoAudio(style, loop, time) {
     const escaping = movingActors.some((actor) => actor.phase === "escape");
     playFootstepSound(movingActors.length, escaping ? "escape" : "repair");
     audioState.nextStepAt = time + (escaping ? 108 : 145) - Math.min(32, movingActors.length * 6);
+  }
+
+  for (const actor of actors) {
+    const abilityId = actor.ability?.id;
+    if (!abilityId || actor.phase !== "repair") continue;
+    if (abilityId === "boost") {
+      cueDemoAbilitySound(`${loop.cycle}:boost:${actor.member.id}:${Math.floor(loop.elapsed / 2600)}`, abilityId);
+    } else if (abilityId === "warp" && loop.elapsed % 1800 < 180) {
+      cueDemoAbilitySound(`${loop.cycle}:warp:${actor.member.id}:${Math.floor(loop.elapsed / 1800)}`, abilityId);
+    } else if (abilityId === "stasis" && actor.stasisPulse) {
+      cueDemoAbilitySound(`${loop.cycle}:stasis:${actor.member.id}:${Math.floor(loop.elapsed / 3000)}`, abilityId);
+    } else if ((abilityId === "greed" || abilityId === "magnet") && actor.activeNode) {
+      cueDemoAbilitySound(`${loop.cycle}:${abilityId}:${actor.member.id}:${actor.activeNode.id}`, abilityId);
+    }
   }
 
   if (audioState.explosionCycle !== loop.cycle && loop.elapsed >= EXPLOSION_START && loop.elapsed < EXPLOSION_START + 1350) {
@@ -601,6 +664,24 @@ function getLoopState(totalElapsed) {
     upgradeLevel,
     rebuildProgress,
   };
+}
+
+function getDemoLoopState(totalElapsed) {
+  let elapsed = Math.max(0, totalElapsed);
+  let cycle = 0;
+  while (cycle < 200) {
+    const cycleDuration = getDemoCycleDuration(cycle);
+    if (elapsed < cycleDuration) {
+      return getDemoVisualLoop({ cycle, elapsed, rebuildProgress: 0, upgradeLevel: cycle });
+    }
+    elapsed -= cycleDuration;
+    cycle += 1;
+  }
+  return getDemoVisualLoop({ cycle, elapsed: 0, rebuildProgress: 0, upgradeLevel: cycle });
+}
+
+function getDemoCycleDuration(cycle) {
+  return getDemoDetonationElapsed(cycle) + (REBUILD_END - EXPLOSION_START);
 }
 
 function getDemoCountdownMs(loop) {
@@ -655,6 +736,25 @@ function getDemoAbility(member, cycle) {
   }
   const index = Math.floor(hash2d(cycle + 1, getStringSeed(member.id), getStringSeed(member.role)) * demoAbilities.length);
   return demoAbilities[Math.min(demoAbilities.length - 1, index)];
+}
+
+function normalizeDemoNode(node) {
+  const distance = Math.hypot(node.x - DEMO_BLAST.x, node.y - DEMO_BLAST.y);
+  let value = node.value;
+  if (value < 0 && distance <= DEMO_RED_EXCLUSION_RADIUS) {
+    value = Math.abs(value);
+  }
+  if (value > 0) {
+    const falloff = (distance - 60) / 300;
+    const closeness = 1 - clamp(falloff, 0, 1);
+    const min = node.bonus ? 6.2 : 2.1;
+    const max = node.bonus ? 8.8 : 6.2;
+    value = min + closeness * (max - min);
+  }
+  return {
+    ...node,
+    value: Number(value.toFixed(2)),
+  };
 }
 
 function getDemoVisibleNodes(cycle, elapsed) {
@@ -970,6 +1070,7 @@ function getDemoRoom(loop, time) {
     repairedNodeCount: nodes.filter((node) => node.repaired).length,
     players,
     summary: getDemoSummary(loop),
+    skillStats: getDemoSkillStats(loop),
     targetPlayerCount: squad.length,
   };
 }
@@ -1025,6 +1126,50 @@ function getDemoSummary(loop) {
       lost: outcome.caught ? outcome.storedRoundScore : 0,
     };
   });
+}
+
+function getDemoSkillStats(loop) {
+  const elapsed = Math.min(loop.elapsed, EXPLOSION_START - 1);
+  const stats = {
+    boost: { label: "BOOST", count: 0, detail: "speed blips" },
+    magnet: { label: "MAG", count: 0, detail: "remote claims" },
+    stasis: { label: "STASIS", count: 0, detail: "players frozen" },
+    warp: { label: "WARP", count: 0, detail: "portal hops" },
+    greed: { label: "GREED", count: 0, detail: "rich snaps" },
+  };
+
+  for (const [index, member] of squad.entries()) {
+    const ability = getDemoAbility(member, loop.cycle);
+    if (ability.id === "boost") {
+      stats.boost.count += Math.max(0, Math.floor(elapsed / 2600));
+    } else if (ability.id === "warp") {
+      stats.warp.count += Math.max(0, Math.floor(elapsed / 1800));
+    } else if (ability.id === "magnet") {
+      const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, elapsed));
+      stats.magnet.count += demoNodes.filter((node) => repairedIds.has(node.id)).length;
+    } else if (ability.id === "greed") {
+      const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, elapsed));
+      stats.greed.count += demoNodes.filter((node) => repairedIds.has(node.id) && (node.bonus || Math.abs(node.value) >= 6)).length;
+    }
+  }
+
+  const pulseCount = Math.max(0, Math.floor(elapsed / 3000) + (elapsed > 0 ? 1 : 0));
+  for (let pulse = 0; pulse < pulseCount; pulse += 1) {
+    const pulseElapsed = Math.min(elapsed, pulse * 3000);
+    const sources = getDemoStasisPulseSources(pulseElapsed, loop.cycle);
+    for (const source of sources) {
+      for (const [index, member] of squad.entries()) {
+        const ability = getDemoAbility(member, loop.cycle);
+        if (ability.id === "stasis") continue;
+        const position = getDemoPlayPosition(member, index, loop.cycle, pulseElapsed);
+        if (Math.hypot(source.x - position.x, source.y - position.y) <= DEMO_STASIS_RADIUS) {
+          stats.stasis.count += 1;
+        }
+      }
+    }
+  }
+
+  return stats;
 }
 
 function getPointOnPath(points, progress) {
@@ -2617,6 +2762,25 @@ function drawDemoHud(style, room, loop) {
   }
 }
 
+function drawDemoSkillLog(style, room) {
+  const stats = Object.values(room?.skillStats || {});
+  if (stats.length === 0) return;
+  const x = 548;
+  const y = 286;
+  px(x, y, 174, 82, "rgba(0, 0, 0, 0.66)");
+  px(x, y, 174, 3, style.scene.accent);
+  ctx.fillStyle = style.css.text;
+  ctx.font = "8px monospace";
+  ctx.fillText("DEMO SKILL LOG", x + 16, y + 18);
+  ctx.font = "6px monospace";
+  for (let i = 0; i < stats.length; i += 1) {
+    const stat = stats[i];
+    const rowY = y + 32 + i * 9;
+    ctx.fillStyle = stat.count > 0 ? style.css.text : style.css.muted;
+    ctx.fillText(`${stat.label.padEnd(6, " ")} ${String(stat.count).padStart(2, " ")} ${stat.detail}`, x + 12, rowY);
+  }
+}
+
 function drawDemoBlastReport(style, room, loop) {
   if (!room || loop.elapsed < DEMO_SUMMARY_START || loop.elapsed >= DEMO_VORTEX_START) return;
   const summary = room.summary || [];
@@ -3158,12 +3322,73 @@ function drawVignette(style) {
   ctx.globalAlpha = 1;
 }
 
+function getDemoTransitionStage(elapsed) {
+  if (elapsed < EXPLOSION_START) return "repair";
+  if (elapsed < REBUILD_START) return "blast";
+  if (elapsed < DEMO_VORTEX_START) return "rebuild";
+  return "vortex";
+}
+
+function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
+  const loop = getDemoLoopState(totalElapsed);
+  const room = getDemoRoom(loop, time);
+  const players = Object.values(room.players || {});
+  const nodes = room.nodes || [];
+  const routePlans = squad.map((member, index) => ({
+    id: member.id,
+    ability: getDemoAbility(member, loop.cycle).id,
+    targets: getDemoNodePlan(member, index, loop.cycle)
+      .slice(0, 3)
+      .map((node) => node.id),
+  }));
+
+  return {
+    cycle: loop.cycle,
+    elapsed: loop.elapsed,
+    stage: getDemoTransitionStage(loop.elapsed),
+    countdownMs: getDemoCountdownMs(loop),
+    nodeTimerDeltaMs: room.nodeTimerDeltaMs,
+    repairedNodeCount: room.repairedNodeCount,
+    claimedNodeCount: nodes.filter((node) => node.claimedBy).length,
+    nodeCount: nodes.length,
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      x: node.x,
+      y: node.y,
+      value: node.value,
+      bonus: Boolean(node.bonus),
+      negative: node.value < 0,
+      distanceFromPlant: Math.hypot(node.x - DEMO_BLAST.x, node.y - DEMO_BLAST.y),
+    })),
+    playerCount: players.length,
+    frozenCount: players.filter((player) => player.state === "frozen").length,
+    skillStats: getDemoSkillStats(loop),
+    demoOnlyAbilityIds: [...DEMO_ONLY_ABILITY_IDS],
+    playerAbilities: players.map((player) => player.ability?.id).filter(Boolean),
+    routePlans,
+  };
+}
+
+window.__POWER_PLANT_DEMO_DEBUG__ = {
+  getSnapshotAt: getDemoMechanicsSnapshot,
+  demoOnlyAbilityIds: [...DEMO_ONLY_ABILITY_IDS],
+  timings: {
+    nominalLoopDuration: LOOP_DURATION,
+    firstLoopDuration: getDemoCycleDuration(0),
+    explosionStart: EXPLOSION_START,
+    rebuildStart: REBUILD_START,
+    vortexStart: DEMO_VORTEX_START,
+    rebuildEnd: REBUILD_END,
+    postDetonationDuration: REBUILD_END - EXPLOSION_START,
+  },
+};
+
 function render(now) {
   const style = styles[activeStyle];
   const rawElapsed = gameStarted ? now - startedAt : 0;
   const elapsed = sessionState.room ? rawElapsed : rawElapsed * DEMO_TIME_SCALE;
-  const baseLoop = getLoopState(elapsed);
-  const loop = sessionState.room ? getRoomVisualLoop(baseLoop) : getDemoVisualLoop(baseLoop);
+  const baseLoop = sessionState.room ? getLoopState(elapsed) : getDemoLoopState(elapsed);
+  const loop = sessionState.room ? getRoomVisualLoop(baseLoop) : baseLoop;
   const demoRoom = sessionState.room ? null : getDemoRoom(loop, now);
   const plantProgress = clamp(loop.elapsed / 7200, 0, 1);
 
@@ -3197,6 +3422,7 @@ function render(now) {
     drawSquad(style, loop, now, demoRoom);
     drawClaimTimers(style, demoRoom);
     drawDemoHud(style, demoRoom, loop);
+    drawDemoSkillLog(style, demoRoom);
     drawDemoBlastReport(style, demoRoom, loop);
     drawVortexTransition(style, loop, now);
   }

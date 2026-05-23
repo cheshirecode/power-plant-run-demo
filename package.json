@@ -8,7 +8,8 @@
     "deploy": "wrangler deploy",
     "cf:whoami": "wrangler whoami",
     "smoke:admin": "node scripts/smoke-admin.mjs",
-    "smoke:bots": "node scripts/smoke-bot-rooms.mjs"
+    "smoke:bots": "node scripts/smoke-bot-rooms.mjs",
+    "smoke:demo": "node scripts/smoke-demo-scene.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.94.0",

@@ -49,9 +49,15 @@ Local commands:
 ```sh
 npm install
 npm run dev
+npm run smoke:demo
 npm run smoke:bots
 npm run deploy
 ```
+
+`npm run smoke:demo` loads the browser demo scene with canvas/DOM stubs and
+checks the actual demo mechanics: eight players, 20 starting nodes, claim/repair
+progress, timer deltas, stasis freezes, visible rebuild timing, short vortex
+handoff, and demo-only skills staying out of server gameplay.
 
 `npm run smoke:bots` expects a running Worker at `POWER_PLANT_RUN_SMOKE_URL`
 or `http://127.0.0.1:8787`. It creates 2, 3, and 4 player bot rooms, verifies

@@ -429,11 +429,11 @@ h1 {
     linear-gradient(#142a36, #0b1a22);
 }
 
-.skill-blink {
+.skill-warp {
   background:
-    linear-gradient(90deg, transparent 0 4px, #d5983b 4px 10px, transparent 10px),
-    linear-gradient(transparent 0 12px, rgba(241, 232, 207, 0.8) 12px 16px, transparent 16px),
-    linear-gradient(135deg, transparent 0 50%, #5f4728 50% 65%, transparent 65%),
+    radial-gradient(circle at 50% 50%, #f1e8cf 0 3px, transparent 4px),
+    linear-gradient(90deg, transparent 0 5px, #d5983b 5px 9px, transparent 9px 13px, #d5983b 13px 17px, transparent 17px),
+    linear-gradient(transparent 0 5px, #5f4728 5px 9px, transparent 9px 13px, #5f4728 13px 17px, transparent 17px),
     linear-gradient(#2a2619, #15130d);
 }
 
