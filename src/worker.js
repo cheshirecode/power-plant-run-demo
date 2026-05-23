@@ -9,8 +9,6 @@ const NEXT_COOKIE = "ppr_oauth_next";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
 const ROUND_COUNTDOWN_MS = 20_000;
 const EXPLOSION_DURATION_MS = 2_200;
-const SUMMARY_DURATION_MS = 5_000;
-const REBUILD_DURATION_MS = 2_800;
 const NODE_VALUE_MIN = 5;
 const NODE_VALUE_MAX = 10;
 const NODE_REPAIR_RADIUS = 12;
@@ -65,10 +63,6 @@ export class GameRoom {
     if (!playerId) {
       return json({ error: "Missing or invalid player id" }, 400);
     }
-    if (!this.roomState.players[playerId] && Object.keys(this.roomState.players).length >= MAX_PLAYERS) {
-      return json({ error: "Room is full" }, 409);
-    }
-
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.acceptPlayer(server, playerId);
@@ -82,14 +76,17 @@ export class GameRoom {
   acceptPlayer(socket, playerId) {
     socket.accept();
     this.sessions.set(socket, playerId);
+    const existingPlayer = this.roomState.players[playerId];
+    const activePlayers = Object.values(this.roomState.players).filter((player) => !player.spectator);
     this.roomState.players[playerId] ||= {
       id: playerId,
       joinedAt: Date.now(),
-      role: this.nextRole(),
+      role: existingPlayer?.role || this.nextRole(),
       x: 42,
       y: 178,
       score: 0,
       ready: false,
+      spectator: this.roomState.phase !== "lobby" || activePlayers.length >= this.roomState.targetPlayerCount,
     };
 
     socket.send(
@@ -130,6 +127,8 @@ export class GameRoom {
     await this.advanceTimedPhase();
 
     if (message.type === "ready" || message.type === "player:ready") {
+      if (this.roomState.players[playerId].spectator) return;
+      if (this.roomState.phase !== "lobby") return;
       this.roomState.players[playerId].ready = Boolean(message.ready);
       await this.maybeStartRun();
       this.broadcastState("room:state");
@@ -137,6 +136,8 @@ export class GameRoom {
     }
 
     if (message.type === "move" || message.type === "player:move") {
+      if (this.roomState.players[playerId].spectator) return;
+      if (this.roomState.phase !== "repair") return;
       await this.updatePlayerPosition(playerId, message);
       this.broadcastState("room:state");
       return;
@@ -145,7 +146,7 @@ export class GameRoom {
   }
 
   async maybeStartRun() {
-    const players = Object.values(this.roomState.players);
+    const players = Object.values(this.roomState.players).filter((player) => !player.spectator);
     if (this.roomState.phase !== "lobby" || players.length === 0) return;
     if (players.length < this.roomState.targetPlayerCount) return;
     if (!players.every((player) => player.ready)) return;
@@ -205,11 +206,7 @@ export class GameRoom {
       await this.setPhase("explosion", EXPLOSION_DURATION_MS);
     } else if (this.roomState.phase === "explosion" && elapsed >= EXPLOSION_DURATION_MS) {
       this.createSummary();
-      await this.setPhase("summary", SUMMARY_DURATION_MS);
-    } else if (this.roomState.phase === "summary" && elapsed >= SUMMARY_DURATION_MS) {
-      await this.setPhase("rebuild", REBUILD_DURATION_MS);
-    } else if (this.roomState.phase === "rebuild" && elapsed >= REBUILD_DURATION_MS) {
-      this.finishRebuild();
+      await this.setPhase("end");
     } else if (fromAlarm) {
       this.broadcastState("room:state");
     }
@@ -220,20 +217,6 @@ export class GameRoom {
     this.roomState.phaseStartedAt = Date.now();
     if (durationMs) {
       await this.state.storage.setAlarm(Date.now() + durationMs + 50);
-    }
-  }
-
-  finishRebuild() {
-    this.roomState.phase = "lobby";
-    this.roomState.phaseStartedAt = null;
-    this.roomState.startedAt = null;
-    this.roomState.countdownEndsAt = null;
-    this.roomState.upgradeLevel += this.roomState.score >= 2 ? 1 : 0;
-    this.roomState.nodes = cloneNodes();
-    this.roomState.score = 0;
-    for (const player of Object.values(this.roomState.players)) {
-      player.ready = false;
-      player.caughtInBlast = false;
     }
   }
 
@@ -254,13 +237,14 @@ export class GameRoom {
         id: player.id,
         score: player.score,
         caughtInBlast: Boolean(player.caughtInBlast),
+        spectator: Boolean(player.spectator),
       }))
       .sort((a, b) => b.score - a.score);
   }
 
   nextRole() {
     const roles = ["rifleman", "scout", "heavy", "engineer"];
-    const usedRoles = new Set(Object.values(this.roomState.players).map((player) => player.role));
+    const usedRoles = new Set(Object.values(this.roomState.players).filter((player) => !player.spectator).map((player) => player.role));
     return roles.find((role) => !usedRoles.has(role)) || roles[0];
   }
 

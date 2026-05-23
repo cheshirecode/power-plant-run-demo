@@ -534,7 +534,7 @@ function setStatus(loop) {
     const room = sessionState.room;
     let next = `Room ${room.phase}`;
     if (room.phase === "repair") next = `Detonation in ${getCountdownSeconds()}s`;
-    if (room.phase === "summary") next = "Round summary";
+    if (room.phase === "end") next = "Round summary";
     if (next !== lastStatus) {
       statusText.textContent = next;
       lastStatus = next;
@@ -578,20 +578,23 @@ async function loadSession() {
 
 function updateSessionUi() {
   const user = sessionState.user;
+  const local = getLocalPlayer();
+  const isSpectator = Boolean(local?.spectator);
   authStatus.textContent = user ? `@${user.login}` : "Signed out";
   loginButton.classList.toggle("is-hidden", Boolean(user));
   logoutButton.classList.toggle("is-hidden", !user);
   createRoomButton.disabled = !user;
   joinRoomButton.disabled = !user;
-  readyButton.disabled = !user || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
+  readyButton.disabled =
+    !user || isSpectator || sessionState.room?.phase !== "lobby" || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
   copyRoomButton.disabled = !sessionState.roomId;
   roomSizeInput.disabled = !user || Boolean(sessionState.roomId);
   roomCodeInput.disabled = !user;
   readyButton.classList.toggle("is-active", sessionState.ready);
   readyButton.setAttribute("aria-pressed", String(sessionState.ready));
-  readyButton.textContent = sessionState.ready ? "Ready" : "Ready";
+  readyButton.textContent = isSpectator ? "Watch" : "Ready";
   roomReadyButton.disabled = readyButton.disabled;
-  roomReadyButton.textContent = sessionState.ready ? "Ready" : "Ready";
+  roomReadyButton.textContent = isSpectator ? "Spectating" : "Ready";
   shell.classList.toggle("is-roomed", Boolean(sessionState.roomId));
   updateRoomSheet();
 }
@@ -607,11 +610,14 @@ function updateRoomStatus(nextStatus = null) {
     return;
   }
 
-  const playerCount = sessionState.room ? Object.keys(sessionState.room.players || {}).length : 1;
+  const players = Object.values(sessionState.room?.players || {});
+  const activeCount = players.filter((player) => !player.spectator).length;
+  const spectatorCount = players.filter((player) => player.spectator).length;
   const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
   const phase = sessionState.room?.phase || "room";
   const suffix = phase === "repair" ? ` · ${getCountdownSeconds()}s` : "";
-  roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/${targetCount} · ${phase}${suffix}`;
+  const spectators = spectatorCount > 0 ? ` · ${spectatorCount} watching` : "";
+  roomStatus.textContent = `${sessionState.roomId} · ${activeCount}/${targetCount}${spectators} · ${phase}${suffix}`;
 }
 
 function updateRoomSheet() {
@@ -620,6 +626,7 @@ function updateRoomSheet() {
       sessionState.roomId &&
       sessionState.socket?.readyState === WebSocket.OPEN &&
       sessionState.room?.phase === "lobby" &&
+      !getLocalPlayer()?.spectator &&
       !sessionState.ready &&
       sessionState.briefingDismissedFor !== sessionState.roomId,
   );
@@ -627,7 +634,7 @@ function updateRoomSheet() {
   roomSheet.classList.toggle("is-hidden", !shouldShow);
   if (!shouldShow) return;
 
-  const playerCount = Object.keys(sessionState.room?.players || {}).length;
+  const playerCount = Object.values(sessionState.room?.players || {}).filter((player) => !player.spectator).length;
   const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
   roomSheetStatus.textContent = `${sessionState.roomId} · ${playerCount}/${targetCount} joined`;
 }
@@ -745,7 +752,7 @@ function updateRoomPosition(loop, time) {
   if (!sessionState.user || !sessionState.room || time < sessionState.nextMoveAt) return;
 
   const player = sessionState.room.players?.[sessionState.user.login];
-  if (!player) return;
+  if (!player || player.spectator || sessionState.room.phase !== "repair") return;
 
   if (!sessionState.localPosition) {
     sessionState.localPosition = { x: player.x || 42, y: player.y || 178 };
@@ -796,17 +803,15 @@ async function copyRoomLink() {
 
 function handleCanvasClick(event) {
   if (!sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN || !sessionState.room) return;
+  if (getLocalPlayer()?.spectator || sessionState.room.phase !== "repair") return;
 
   const point = getCanvasPoint(event);
   setControlTarget(point);
-  if (sessionState.room.phase === "repair") {
-    setControlTarget(point);
-  }
-
 }
 
 function handleCanvasPointerMove(event) {
   if (!sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN || !sessionState.room) return;
+  if (getLocalPlayer()?.spectator || sessionState.room.phase !== "repair") return;
   setControlTarget(getCanvasPoint(event));
 }
 
@@ -820,6 +825,10 @@ function setControlTarget(point) {
 function getCountdownSeconds() {
   if (!sessionState.room?.countdownEndsAt) return 0;
   return Math.max(0, Math.ceil((sessionState.room.countdownEndsAt - Date.now()) / 1000));
+}
+
+function getLocalPlayer() {
+  return sessionState.room?.players?.[sessionState.user?.login] || null;
 }
 
 function getCanvasPoint(event) {
@@ -1567,15 +1576,15 @@ function drawRoomPlayers(style) {
     if (x <= 0 || y <= 0) continue;
 
     px(x - 5, y - 14, 10, 10, style.scene.shadow);
-    px(x - 3, y - 18, 6, 6, isLocal ? style.css.text : style.scene.glow);
-    px(x - 2, y - 17, 4, 4, isLocal ? style.scene.glow : style.scene.accent);
-    px(x - 5, y - 7, 10, 3, isLocal ? style.scene.accent : style.scene.soldier.armor);
+    px(x - 3, y - 18, 6, 6, player.spectator ? style.scene.rock : isLocal ? style.css.text : style.scene.glow);
+    px(x - 2, y - 17, 4, 4, player.spectator ? style.scene.groundDark : isLocal ? style.scene.glow : style.scene.accent);
+    px(x - 5, y - 7, 10, 3, player.spectator ? style.scene.rock : isLocal ? style.scene.accent : style.scene.soldier.armor);
     px(x - 8, y - 23, Math.min(34, player.id.length * 4 + 4), 5, "rgba(0, 0, 0, 0.62)");
     ctx.fillStyle = style.css.text;
     ctx.font = "5px monospace";
     ctx.fillText(player.id.slice(0, 8), x - 6, y - 19);
 
-    if (isLocal) {
+    if (isLocal && !player.spectator) {
       drawPlayerArrow(style, x, y, player.ready);
     }
   }
@@ -1618,6 +1627,24 @@ function drawRoomObjectives(style, time) {
 
 }
 
+function drawBuildingCountdown(style, time) {
+  const room = sessionState.room;
+  if (!room || room.phase !== "repair") return;
+
+  const seconds = getCountdownSeconds();
+  const blink = seconds <= 5 ? Math.sin(time / 90) > -0.25 : Math.sin(time / 280) > -0.7;
+  if (!blink) return;
+
+  const label = String(seconds).padStart(2, "0");
+  const x = 213;
+  const y = 58;
+  px(x - 10, y - 21, 70, 31, "rgba(0, 0, 0, 0.68)");
+  px(x - 10, y - 21, 70, 3, style.scene.accent);
+  ctx.fillStyle = seconds <= 5 ? "#ff6b28" : style.css.text;
+  ctx.font = "28px monospace";
+  ctx.fillText(label, x, y);
+}
+
 function drawRoomHud(style) {
   const room = sessionState.room;
   if (!room) return;
@@ -1626,10 +1653,12 @@ function drawRoomHud(style) {
   px(8, 8, 118, 24, "rgba(0, 0, 0, 0.58)");
   ctx.fillStyle = style.css.text;
   ctx.font = "7px monospace";
-  ctx.fillText(`TIME ${getCountdownSeconds()}s`, 14, 18);
-  ctx.fillText(`SCORE ${local?.score || 0}`, 14, 28);
+  const timeLabel = room.phase === "end" ? "ENDED" : `${getCountdownSeconds()}s`;
+  const scoreLabel = local?.spectator ? "WATCH" : local?.score || 0;
+  ctx.fillText(`TIME ${timeLabel}`, 14, 18);
+  ctx.fillText(`SCORE ${scoreLabel}`, 14, 28);
 
-  if (room.phase === "summary" && room.summary) {
+  if (room.phase === "end" && room.summary) {
     drawRoundSummary(style, room.summary);
   }
 }
@@ -1637,17 +1666,48 @@ function drawRoomHud(style) {
 function drawRoundSummary(style, summary) {
   const panelX = 118;
   const panelY = 54;
-  px(panelX, panelY, 150, 88, "rgba(0, 0, 0, 0.72)");
+  const visibleRows = summary.slice(0, 8);
+  const panelHeight = Math.max(62, 34 + visibleRows.length * 12);
+  px(panelX, panelY, 150, panelHeight, "rgba(0, 0, 0, 0.72)");
   px(panelX, panelY, 150, 3, style.scene.accent);
   ctx.fillStyle = style.css.text;
   ctx.font = "8px monospace";
   ctx.fillText("ROUND SUMMARY", panelX + 18, panelY + 18);
   ctx.font = "7px monospace";
-  for (let i = 0; i < summary.length; i += 1) {
-    const row = summary[i];
-    const label = row.caughtInBlast ? "BLAST" : "CLEAR";
+  for (let i = 0; i < visibleRows.length; i += 1) {
+    const row = visibleRows[i];
+    const label = row.spectator ? "WATCH" : row.caughtInBlast ? "BLAST" : "CLEAR";
     ctx.fillText(`${row.id.slice(0, 8)} ${row.score} ${label}`, panelX + 12, panelY + 34 + i * 12);
   }
+}
+
+function getRoomVisualLoop(fallbackLoop) {
+  const room = sessionState.room;
+  if (!room) return fallbackLoop;
+
+  if (room.phase === "explosion") {
+    return {
+      ...fallbackLoop,
+      elapsed: EXPLOSION_START + Math.max(0, Date.now() - room.phaseStartedAt),
+      rebuildProgress: 0,
+      upgradeLevel: room.upgradeLevel || 0,
+    };
+  }
+
+  if (room.phase === "end") {
+    return {
+      ...fallbackLoop,
+      elapsed: EXPLOSION_START + 3000,
+      rebuildProgress: 0,
+      upgradeLevel: room.upgradeLevel || 0,
+    };
+  }
+
+  return {
+    ...fallbackLoop,
+    elapsed: Math.min(EXPLOSION_START - 1, fallbackLoop.elapsed),
+    upgradeLevel: room.upgradeLevel || 0,
+  };
 }
 
 function getSquadMemberState(member, index, elapsed, time) {
@@ -1993,7 +2053,7 @@ function drawVignette(style) {
 function render(now) {
   const style = styles[activeStyle];
   const elapsed = gameStarted ? now - startedAt : 0;
-  const loop = getLoopState(elapsed);
+  const loop = getRoomVisualLoop(getLoopState(elapsed));
   const plantProgress = clamp(loop.elapsed / 7200, 0, 1);
 
   if (gameStarted) {
@@ -2008,6 +2068,7 @@ function render(now) {
   drawPlant(style, now, plantProgress, loop);
   drawExplosion(style, loop.elapsed, now);
   drawRoomObjectives(style, now);
+  drawBuildingCountdown(style, now);
   if (sessionState.room) {
     drawRoomPlayers(style);
     drawRoomHud(style);
