@@ -1841,15 +1841,15 @@ function drawRoomObjectives(style, time) {
       const color = node.repaired ? style.scene.groundLight : isNegative ? "#ff4f36" : "#57d56c";
       const edge = node.repaired ? style.scene.groundDark : isClaimed ? style.css.text : isNegative ? "#5b1711" : "#153119";
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
-      drawPixelCircle(node.x, node.y, node.repaired ? 7 : node.radius || (isRich ? 11 : 9) + pulse, color, edge);
-      drawPixelCircle(node.x, node.y, node.repaired ? 7 : (isRich ? 11 : 9) + pulse, color, edge);
-      px(node.x - 7, node.y - 7, 14, 14, node.repaired ? style.scene.groundDark : isNegative ? "#3a1512" : "#153119");
-      px(node.x - 3, node.y - 3, 6, 6, node.repaired ? style.scene.groundLight : style.css.text);
+      drawPixelCircle(node.x, node.y, node.repaired ? 5 : node.radius || (isRich ? 8 : 7) + pulse, color, edge);
+      drawPixelCircle(node.x, node.y, node.repaired ? 5 : (isRich ? 8 : 7) + pulse, color, edge);
+      px(node.x - 5, node.y - 5, 10, 10, node.repaired ? style.scene.groundDark : isNegative ? "#3a1512" : "#153119");
+      px(node.x - 2, node.y - 2, 4, 4, node.repaired ? style.scene.groundLight : style.css.text);
       if (node.bonus && !node.repaired) {
-        px(node.x - 2, node.y - 11, 4, 4, style.css.text);
-        px(node.x - 2, node.y + 7, 4, 4, style.css.text);
-        px(node.x - 11, node.y - 2, 4, 4, style.css.text);
-        px(node.x + 7, node.y - 2, 4, 4, style.css.text);
+        px(node.x - 1, node.y - 9, 2, 3, style.css.text);
+        px(node.x - 1, node.y + 6, 2, 3, style.css.text);
+        px(node.x - 9, node.y - 1, 3, 2, style.css.text);
+        px(node.x + 6, node.y - 1, 3, 2, style.css.text);
       }
       ctx.fillStyle = style.css.text;
       ctx.font = "7px monospace";

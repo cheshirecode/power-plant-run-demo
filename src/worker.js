@@ -17,9 +17,9 @@ const NODE_BONUS_COUNT_MIN = 3;
 const NODE_BONUS_COUNT_MAX = 4;
 const NODE_NEGATIVE_CHANCE = 0.32;
 const NODE_HOLD_SECONDS_PER_POINT = 1 / 3;
-const NODE_REPAIR_RADIUS_MIN = 18;
-const NODE_REPAIR_RADIUS_MAX = 26;
-const NODE_MIN_DISTANCE = 30;
+const NODE_REPAIR_RADIUS_MIN = 12;
+const NODE_REPAIR_RADIUS_MAX = 18;
+const NODE_MIN_DISTANCE = 24;
 const NODE_MAX_VALUE_DISTANCE = 40;
 const NODE_MIN_VALUE_DISTANCE = 190;
 const NODE_VALUE_DECIMALS = 2;
@@ -28,16 +28,34 @@ const BLAST_RADIUS_BASE = 92;
 const BLAST_RADIUS_JITTER = 10;
 const MAX_PLAYERS = 4;
 const START_NODES = [
-  { id: "n1", x: 72, y: 176 },
-  { id: "n2", x: 94, y: 70 },
-  { id: "n3", x: 142, y: 154 },
-  { id: "n4", x: 174, y: 84 },
-  { id: "n5", x: 198, y: 142 },
-  { id: "n6", x: 228, y: 70 },
-  { id: "n7", x: 272, y: 70 },
-  { id: "n8", x: 292, y: 138 },
-  { id: "n9", x: 326, y: 96 },
-  { id: "n10", x: 326, y: 178 },
+  { id: "n1", x: 48, y: 176 },
+  { id: "n2", x: 56, y: 96 },
+  { id: "n3", x: 86, y: 42 },
+  { id: "n4", x: 100, y: 148 },
+  { id: "n5", x: 130, y: 78 },
+  { id: "n6", x: 150, y: 184 },
+  { id: "n7", x: 160, y: 130 },
+  { id: "n8", x: 178, y: 54 },
+  { id: "n9", x: 196, y: 118 },
+  { id: "n10", x: 218, y: 176 },
+  { id: "n11", x: 238, y: 46 },
+  { id: "n12", x: 264, y: 92 },
+  { id: "n13", x: 286, y: 154 },
+  { id: "n14", x: 320, y: 58 },
+  { id: "n15", x: 336, y: 120 },
+  { id: "n16", x: 342, y: 184 },
+];
+const PLAYER_SPAWNS = [
+  { x: 34, y: 184 },
+  { x: 40, y: 36 },
+  { x: 82, y: 198 },
+  { x: 94, y: 24 },
+  { x: 138, y: 204 },
+  { x: 22, y: 118 },
+  { x: 364, y: 24 },
+  { x: 366, y: 198 },
+  { x: 304, y: 206 },
+  { x: 368, y: 70 },
 ];
 
 export class GameRoom {
@@ -280,10 +298,14 @@ export class GameRoom {
     this.roomState.replayVotes = {};
     this.roomState.closed = false;
     this.roomState.countdownEndsAt = Date.now() + ROUND_COUNTDOWN_MS;
+    const spawns = safePlayerSpawns(this.roomState.blast, players.length);
     for (const player of players) {
       if (resetScores) {
         player.score = 0;
       }
+      const spawn = spawns.shift() || { x: 42, y: 178 };
+      player.x = spawn.x;
+      player.y = spawn.y;
       player.roundScore = 0;
       player.caughtInBlast = false;
       player.ready = false;
@@ -523,7 +545,7 @@ function cloneNodes() {
 
 function chooseBonusNodeIds() {
   const count = NODE_BONUS_COUNT_MIN + Math.floor(Math.random() * (NODE_BONUS_COUNT_MAX - NODE_BONUS_COUNT_MIN + 1));
-  const shuffled = [...START_NODES].sort(() => Math.random() - 0.5);
+  const shuffled = shuffle(START_NODES);
   return new Set(shuffled.slice(0, count).map((node) => node.id));
 }
 
@@ -581,6 +603,17 @@ function makeBlast() {
     y: BLAST_CENTER.y,
     radius: BLAST_RADIUS_BASE + Math.round((Math.random() * 2 - 1) * BLAST_RADIUS_JITTER),
   };
+}
+
+function safePlayerSpawns(blast, count) {
+  const safeDistance = blast.radius + 12;
+  const safe = shuffle(PLAYER_SPAWNS).filter((spawn) => Math.hypot(spawn.x - blast.x, spawn.y - blast.y) > safeDistance);
+  if (safe.length >= count) return safe;
+  return [...safe, ...shuffle(PLAYER_SPAWNS).filter((spawn) => !safe.includes(spawn))];
+}
+
+function shuffle(items) {
+  return [...items].sort(() => Math.random() - 0.5);
 }
 
 function getDirectory(env) {
