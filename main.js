@@ -193,20 +193,23 @@ const plantPalettes = {
   },
 };
 
-const LOOP_DURATION = 104000;
+const LOOP_DURATION = 78000;
 const EXPLOSION_START = 60000;
-const ESCAPE_START = 63600;
-const REBUILD_START = 84000;
-const REBUILD_END = 100000;
+const ESCAPE_START = 61200;
+const REBUILD_START = 68000;
+const REBUILD_END = 78000;
 const DEMO_TIME_SCALE = 1;
 const DEMO_REPAIR_DURATION = 60000;
 const DEMO_NODE_SPAWN_MS = 2000;
-const DEMO_INITIAL_NODE_COUNT = 3;
-const DEMO_RUNNER_SPEED = 1.45;
+const DEMO_INITIAL_NODE_COUNT = 20;
+const DEMO_RUNNER_SPEED = 2.15;
 const DEMO_ESCAPE_THRESHOLD_MS = 9000;
+const DEMO_ROUTE_DURATION_MS = 10500;
+const DEMO_STASIS_RADIUS = 62;
+const DEMO_STASIS_PULSE_MS = 420;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_SUMMARY_START = EXPLOSION_START + 1400;
-const DEMO_VORTEX_START = REBUILD_END - 1800;
+const DEMO_VORTEX_START = REBUILD_END - 2800;
 const DEMO_PATH_POINTS = [
   { x: 0, y: 354 },
   { x: 118, y: 310 },
@@ -219,16 +222,28 @@ const DEMO_PATH_POINTS = [
 const demoNodes = [
   { id: "dn1", x: 76, y: 338, value: 2.4, size: 8, holdMs: 1200 },
   { id: "dn2", x: 126, y: 94, value: -3.2, size: 8, holdMs: 1600 },
-  { id: "dn3", x: 238, y: 354, value: 4.8, size: 9, holdMs: 2400 },
+  { id: "dn3", x: 238, y: 354, value: -4.8, size: 9, holdMs: 2400 },
   { id: "dn4", x: 306, y: 132, value: 6.1, size: 10, holdMs: 3000, bonus: true },
   { id: "dn5", x: 458, y: 302, value: -5.4, size: 10, holdMs: 2700, bonus: true },
-  { id: "dn6", x: 596, y: 108, value: 3.6, size: 8, holdMs: 1800 },
+  { id: "dn6", x: 596, y: 108, value: -3.6, size: 8, holdMs: 1800 },
   { id: "dn7", x: 690, y: 348, value: 7.9, size: 10, holdMs: 3300, bonus: true },
   { id: "dn8", x: 180, y: 228, value: -2.8, size: 8, holdMs: 1400 },
   { id: "dn9", x: 384, y: 96, value: 5.5, size: 9, holdMs: 2600 },
-  { id: "dn10", x: 536, y: 382, value: 4.1, size: 9, holdMs: 2100 },
+  { id: "dn10", x: 536, y: 382, value: -4.1, size: 9, holdMs: 2100 },
   { id: "dn11", x: 646, y: 234, value: -6.6, size: 10, holdMs: 3000, bonus: true },
   { id: "dn12", x: 352, y: 358, value: 8.4, size: 10, holdMs: 3400, bonus: true },
+  { id: "dn13", x: 54, y: 184, value: -4.2, size: 8, holdMs: 1900 },
+  { id: "dn14", x: 116, y: 404, value: -3.1, size: 8, holdMs: 1500 },
+  { id: "dn15", x: 168, y: 52, value: 5.2, size: 9, holdMs: 2300 },
+  { id: "dn16", x: 268, y: 232, value: -6.9, size: 10, holdMs: 3200, bonus: true },
+  { id: "dn17", x: 410, y: 158, value: 7.4, size: 10, holdMs: 3300, bonus: true },
+  { id: "dn18", x: 486, y: 84, value: -2.9, size: 8, holdMs: 1400 },
+  { id: "dn19", x: 574, y: 218, value: -4.6, size: 9, holdMs: 2100 },
+  { id: "dn20", x: 704, y: 88, value: -5.8, size: 10, holdMs: 2800, bonus: true },
+  { id: "dn21", x: 716, y: 286, value: -2.7, size: 8, holdMs: 1300 },
+  { id: "dn22", x: 438, y: 398, value: -3.7, size: 8, holdMs: 1700 },
+  { id: "dn23", x: 224, y: 168, value: 6.7, size: 10, holdMs: 3100, bonus: true },
+  { id: "dn24", x: 632, y: 380, value: 5.9, size: 9, holdMs: 2600 },
 ];
 const demoAbilities = [
   { id: "boost", label: "BOOST", name: "Overclock Boots", color: "#70a8ff", accent: "#f1e8cf" },
@@ -267,6 +282,34 @@ const squad = [
     spawn: { x: 620, y: 410 },
     escape: { x: 680, y: 424 },
   },
+  {
+    id: "west",
+    gender: "female",
+    role: "scout",
+    spawn: { x: 36, y: 232 },
+    escape: { x: 20, y: 128 },
+  },
+  {
+    id: "ridge",
+    gender: "male",
+    role: "engineer",
+    spawn: { x: 148, y: 42 },
+    escape: { x: 238, y: 18 },
+  },
+  {
+    id: "bolt",
+    gender: "female",
+    role: "rifleman",
+    spawn: { x: 728, y: 390 },
+    escape: { x: 748, y: 320 },
+  },
+  {
+    id: "cinder",
+    gender: "male",
+    role: "heavy",
+    spawn: { x: 390, y: 402 },
+    escape: { x: 462, y: 424 },
+  },
 ];
 
 let activeStyle = "steampunk";
@@ -274,6 +317,8 @@ let startedAt = performance.now();
 let lastStatus = "";
 let gameStarted = false;
 const soldierFrameCache = {};
+const demoVisibleNodeCache = new Map();
+const demoNodePlanCache = new Map();
 const audioState = {
   context: null,
   master: null,
@@ -565,7 +610,11 @@ function getDemoCountdownLabel(loop) {
 }
 
 function getDemoAbility(member, cycle) {
-  const index = Math.floor(hash2d(cycle + 1, member.id.length, member.role.length) * demoAbilities.length);
+  const squadIndex = squad.findIndex((candidate) => candidate.id === member.id);
+  if (squadIndex >= 0 && squadIndex < demoAbilities.length) {
+    return demoAbilities[(squadIndex + cycle) % demoAbilities.length];
+  }
+  const index = Math.floor(hash2d(cycle + 1, getStringSeed(member.id), getStringSeed(member.role)) * demoAbilities.length);
   return demoAbilities[Math.min(demoAbilities.length - 1, index)];
 }
 
@@ -574,12 +623,20 @@ function getDemoVisibleNodes(cycle, elapsed) {
     demoNodes.length,
     DEMO_INITIAL_NODE_COUNT + Math.floor(Math.max(0, elapsed) / DEMO_NODE_SPAWN_MS),
   );
-  return [...demoNodes]
-    .sort((a, b) => hash2d(a.x, cycle + 13, a.y) - hash2d(b.x, cycle + 13, b.y))
-    .slice(0, spawnedCount);
+  const cacheKey = `${cycle}:${spawnedCount}`;
+  if (!demoVisibleNodeCache.has(cacheKey)) {
+    demoVisibleNodeCache.set(
+      cacheKey,
+      [...demoNodes].sort((a, b) => hash2d(a.x, cycle + 13, a.y) - hash2d(b.x, cycle + 13, b.y)).slice(0, spawnedCount),
+    );
+  }
+  return demoVisibleNodeCache.get(cacheKey);
 }
 
 function getDemoNodePlan(member, index, cycle) {
+  const cacheKey = `${cycle}:${member.id}`;
+  if (demoNodePlanCache.has(cacheKey)) return demoNodePlanCache.get(cacheKey);
+
   const ability = getDemoAbility(member, cycle);
   const visibleNodes = getDemoVisibleNodes(cycle, EXPLOSION_START);
   const spawn = member.spawn;
@@ -588,23 +645,32 @@ function getDemoNodePlan(member, index, cycle) {
   const byPositive = (a, b) => b.value - a.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
 
   if (ability.id === "greed") {
-    return [...visibleNodes].sort(byRiches).slice(0, 5);
+    return cacheDemoNodePlan(cacheKey, [...visibleNodes].sort(byRiches).slice(0, 5));
   }
   if (ability.id === "stasis") {
-    return [...visibleNodes].sort(byPressure).slice(0, 5);
+    return cacheDemoNodePlan(cacheKey, [...visibleNodes].sort(byPressure).slice(0, 5));
   }
   if (ability.id === "boost") {
-    return [...visibleNodes].filter((node) => node.value > 0).sort(byPositive).slice(0, 5);
+    return cacheDemoNodePlan(cacheKey, [...visibleNodes].filter((node) => node.value > 0).sort(byPositive).slice(0, 5));
   }
   if (ability.id === "magnet") {
-    return [...visibleNodes]
-      .sort((a, b) => Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y))
-      .slice(0, 5);
+    return cacheDemoNodePlan(
+      cacheKey,
+      [...visibleNodes].sort((a, b) => Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y)).slice(0, 5),
+    );
   }
 
   const start = Math.floor(hash2d(index + 3, cycle + 7, member.id.length) * visibleNodes.length);
   const stride = 2 + (index % 3);
-  return [0, 1, 2, 3, 4].map((offset) => visibleNodes[(start + offset * stride) % visibleNodes.length]).filter(Boolean);
+  return cacheDemoNodePlan(
+    cacheKey,
+    [0, 1, 2, 3, 4].map((offset) => visibleNodes[(start + offset * stride) % visibleNodes.length]).filter(Boolean),
+  );
+}
+
+function cacheDemoNodePlan(cacheKey, plan) {
+  demoNodePlanCache.set(cacheKey, plan);
+  return plan;
 }
 
 function getDemoEscapeThresholdMs(ability) {
@@ -616,7 +682,7 @@ function getDemoEscapeThresholdMs(ability) {
 }
 
 function getDemoPathSpeed(ability) {
-  const abilitySpeed = ability.id === "boost" ? 1.32 : ability.id === "blink" ? 1.16 : 1;
+  const abilitySpeed = ability.id === "boost" ? 1.22 : ability.id === "blink" ? 1.1 : 1;
   return DEMO_RUNNER_SPEED * abilitySpeed;
 }
 
@@ -625,7 +691,7 @@ function getDemoPlayPosition(member, index, cycle, elapsed) {
   const escapeThreshold = getDemoEscapeThresholdMs(ability);
   const escapeStart = Math.max(0, EXPLOSION_START - escapeThreshold);
   const targets = getDemoNodePlan(member, index, cycle);
-  const points = [member.spawn, ...targets];
+  const points = [member.spawn, ...targets, member.spawn];
 
   if (elapsed >= escapeStart) {
     const start = getDemoPlayPosition(member, index, cycle, escapeStart - 1);
@@ -634,7 +700,9 @@ function getDemoPlayPosition(member, index, cycle, elapsed) {
   }
 
   const speed = getDemoPathSpeed(ability);
-  const progress = clamp((elapsed * speed - index * 340) / Math.max(1, escapeStart - 900), 0, 1);
+  const routeDuration = DEMO_ROUTE_DURATION_MS + index * 430;
+  const routeElapsed = elapsed * speed - index * 340;
+  const progress = routeElapsed <= 0 ? 0 : (routeElapsed % routeDuration) / routeDuration;
   return getPointOnPath(points.length > 1 ? points : [member.spawn, member.escape], progress);
 }
 
@@ -664,8 +732,12 @@ function getDemoPlayerOutcome(member, index, loop) {
 
 function getDemoActorState(member, index, loop, time) {
   const ability = getDemoAbility(member, loop.cycle);
-  const freezeActive = isDemoStasisPulseActive(loop.elapsed, loop.cycle);
-  const frozen = freezeActive && ability.id !== "stasis" && loop.elapsed < EXPLOSION_START;
+  const stasisSources = getDemoStasisPulseSources(loop.elapsed, loop.cycle);
+  const currentPosition = getDemoPlayPosition(member, index, loop.cycle, loop.elapsed);
+  const frozen =
+    ability.id !== "stasis" &&
+    loop.elapsed < EXPLOSION_START &&
+    stasisSources.some((source) => Math.hypot(source.x - currentPosition.x, source.y - currentPosition.y) <= DEMO_STASIS_RADIUS);
 
   if (loop.elapsed < EXPLOSION_START) {
     const blinkHop = ability.id === "blink" && loop.elapsed % 1800 < 220 ? 0.045 : 0;
@@ -676,7 +748,7 @@ function getDemoActorState(member, index, loop, time) {
       member,
       ability,
       phase: frozen ? "frozen" : "repair",
-      stasisPulse: freezeActive && ability.id === "stasis",
+      stasisPulse: stasisSources.some((source) => source.memberId === member.id),
       progress: clamp(loop.elapsed / EXPLOSION_START, 0, 1),
       step: frozen ? 0 : Math.floor((time + index * 80) / (ability.id === "boost" ? 80 : 110)) % 2,
       fade: 1,
@@ -728,8 +800,18 @@ function getDemoActorState(member, index, loop, time) {
 }
 
 function isDemoStasisPulseActive(elapsed, cycle) {
-  const hasStasis = squad.some((member) => getDemoAbility(member, cycle).id === "stasis");
-  return hasStasis && elapsed < EXPLOSION_START && elapsed % 3000 < 500;
+  return getDemoStasisPulseSources(elapsed, cycle).length > 0;
+}
+
+function getDemoStasisPulseSources(elapsed, cycle) {
+  if (elapsed >= EXPLOSION_START || elapsed % 3000 >= DEMO_STASIS_PULSE_MS) return [];
+  return squad
+    .map((member, index) => ({ member, index, ability: getDemoAbility(member, cycle) }))
+    .filter((entry) => entry.ability.id === "stasis")
+    .map((entry) => ({
+      ...getDemoPlayPosition(entry.member, entry.index, cycle, elapsed),
+      memberId: entry.member.id,
+    }));
 }
 
 function getDemoRoom(loop, time) {
@@ -756,22 +838,18 @@ function getDemoRoom(loop, time) {
 
   const visibleNodes = getDemoVisibleNodes(loop.cycle, loop.elapsed);
   const nodes = visibleNodes.map((node, index) => {
-    const nearbyMagnet = actors.find(
-      (actor) => actor.ability.id === "magnet" && Math.hypot(actor.x - node.x, actor.y - node.y) <= 72,
-    );
-    const plannedClaimant = actors.find((actor) =>
-      getDemoNodePlan(actor.member, squad.indexOf(actor.member), loop.cycle).some((target) => target.id === node.id),
-    );
-    const claimant = nearbyMagnet || plannedClaimant;
+    const claimant = actors.find((actor) => demoActorCanClaimNode(actor, node));
     const holdTime = claimant?.ability.id === "greed" ? 1600 : claimant?.ability.id === "magnet" ? 1900 : 2200;
-    const claimProgress = claimant ? clamp((loop.elapsed - 900 - index * 420) / holdTime, 0, 1) : 0;
+    const nodeSpawnedAt = Math.max(0, (index - DEMO_INITIAL_NODE_COUNT) * DEMO_NODE_SPAWN_MS);
+    const claimProgress = claimant ? clamp((loop.elapsed - nodeSpawnedAt - index * 90) / holdTime, 0, 1) : 0;
     return {
       ...node,
-      spawnedAt: index * DEMO_NODE_SPAWN_MS,
+      spawnedAt: nodeSpawnedAt,
       seed: node.x * 0.013 + node.y * 0.017 + loop.cycle,
       repaired: claimProgress >= 1 || loop.elapsed > EXPLOSION_START - 900,
       claimedBy: claimProgress > 0.15 && claimProgress < 1 && claimant ? claimant.member.id : null,
-      claimEndsAt: claimProgress > 0.15 && claimProgress < 1 ? now + Math.max(0, (1 - claimProgress) * node.holdMs) : null,
+      claimEndsAt: claimProgress > 0.15 && claimProgress < 1 ? now + Math.max(0, (1 - claimProgress) * holdTime) : null,
+      claimDurationMs: holdTime,
       negative: node.value < 0,
     };
   });
@@ -786,6 +864,16 @@ function getDemoRoom(loop, time) {
     summary: getDemoSummary(loop),
     targetPlayerCount: squad.length,
   };
+}
+
+function demoActorCanClaimNode(actor, node) {
+  if (actor.phase !== "repair") return false;
+  const nodeHalf = (node.size || 8) / 2;
+  const actorHalfWidth = 7;
+  const actorHalfHeight = 10;
+  const touchesNode = Math.abs(actor.x - node.x) <= nodeHalf + actorHalfWidth && Math.abs(actor.y - node.y) <= nodeHalf + actorHalfHeight;
+  if (touchesNode) return true;
+  return actor.ability?.id === "magnet" && Math.hypot(actor.x - node.x, actor.y - node.y) <= 42;
 }
 
 function getDemoSummary(loop) {
@@ -817,6 +905,12 @@ function getPointOnPath(points, progress) {
 function hash2d(x, y, seed = 0) {
   const value = Math.sin(x * 12.9898 + y * 78.233 + seed * 43.17) * 43758.5453;
   return value - Math.floor(value);
+}
+
+function getStringSeed(value) {
+  return String(value)
+    .split("")
+    .reduce((seed, char, index) => seed + char.charCodeAt(0) * (index + 1), 0);
 }
 
 function setStatus(loop) {
@@ -2091,7 +2185,7 @@ function drawEntrance(style, palette, progress, time) {
   px(x - 9, y + 8, 22, 2, colors.path);
 }
 
-function drawSquad(style, loop, time) {
+function drawSquad(style, loop, time, room) {
   const actors = squad
     .map((member, index) => getDemoActorState(member, index, loop, time))
     .filter(Boolean)
@@ -2099,7 +2193,7 @@ function drawSquad(style, loop, time) {
 
   for (const actor of actors) {
     drawPixelSoldierSprite(style, actor, time);
-    drawDemoAbilityTag(style, actor);
+    drawDemoAbilityTag(style, actor, room);
   }
 }
 
@@ -2144,19 +2238,30 @@ function drawAbilityIcon(ability, x, y, size = 9) {
   }
 }
 
-function drawDemoAbilityTag(style, actor) {
+function drawDemoAbilityTag(style, actor, room) {
   if (!actor.ability) return;
   const x = Math.round(actor.x);
   const y = Math.round(actor.y);
   const label = actor.ability.label;
-  const width = Math.min(64, label.length * 6 + 18);
+  const claimNode = room?.nodes?.find((node) => node.claimedBy === actor.member.id && !node.repaired && node.claimEndsAt);
+  const claimLabel = claimNode ? `CLAIM ${formatHoldLabel(claimNode.claimEndsAt - Date.now())}` : "";
+  const width = Math.min(74, Math.max(label.length * 6 + 18, claimLabel.length * 5 + 8));
+  const height = claimLabel ? 22 : 13;
   const left = x - Math.floor(width / 2);
-  px(left, y - 36, width, 13, "rgba(0, 0, 0, 0.82)");
+  const top = y - 36 - (claimLabel ? 8 : 0);
+  px(left, top, width, height, "rgba(0, 0, 0, 0.84)");
   px(left, y - 36, width, 2, actor.ability.color);
   drawAbilityIcon(actor.ability, left + 3, y - 33, 8);
   ctx.fillStyle = style.css.text;
   ctx.font = "7px monospace";
   ctx.fillText(label, left + 15, y - 26);
+  if (claimLabel) {
+    const progress = clamp((claimNode.claimEndsAt - Date.now()) / (claimNode.claimDurationMs || claimNode.holdMs), 0, 1);
+    px(left + 3, top + 4, Math.max(3, Math.round((width - 6) * (1 - progress))), 2, actor.ability.color);
+    ctx.fillStyle = style.css.text;
+    ctx.font = "6px monospace";
+    ctx.fillText(claimLabel, left + 4, top + 12);
+  }
 }
 
 function drawRoomPlayers(style) {
@@ -2308,7 +2413,8 @@ function drawRoomHud(style) {
 
 function drawDemoHud(style, room, loop) {
   if (!room || room.phase !== "repair") return;
-  px(8, 8, 258, 76, "rgba(0, 0, 0, 0.66)");
+  const panelHeight = 36 + squad.length * 10;
+  px(8, 8, 258, panelHeight, "rgba(0, 0, 0, 0.66)");
   px(8, 8, 258, 3, style.scene.accent);
   ctx.fillStyle = style.css.text;
   ctx.font = "8px monospace";
@@ -2853,7 +2959,7 @@ function render(now) {
     drawClaimTimers(style);
     drawRoomHud(style);
   } else {
-    drawSquad(style, loop, now);
+    drawSquad(style, loop, now, demoRoom);
     drawClaimTimers(style, demoRoom);
     drawDemoHud(style, demoRoom, loop);
     drawDemoBlastReport(style, demoRoom, loop);
