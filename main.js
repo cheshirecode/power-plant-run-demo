@@ -1399,6 +1399,28 @@ function drawPixelCircle(cx, cy, radius, fill, edge) {
   }
 }
 
+function drawNodeSmoke(style, node, time, isNegative, isRich) {
+  if (node.repaired) return;
+
+  const seed = node.seed || node.x * 0.013 + node.y * 0.017;
+  const baseAlpha = isRich ? 0.38 : 0.28;
+  const smokeColor = isNegative ? "rgb(126 70 58)" : "rgb(135 126 100)";
+  const glowColor = isNegative ? "#ff6b28" : style.scene.glow;
+  for (let i = 0; i < 5; i += 1) {
+    const cycle = (time / (980 + i * 110) + seed + i * 0.23) % 1;
+    const driftX = 4 + i * 3 + Math.floor(Math.sin(time / 420 + seed * 9 + i) * 2);
+    const driftY = -4 - i * 4 - Math.floor(cycle * 12);
+    const puff = isRich ? 4 - (i % 2) : 3 - (i % 2);
+    ctx.globalAlpha = baseAlpha * (1 - cycle) * (node.claimedBy ? 1.35 : 1);
+    px(Math.round(node.x + driftX), Math.round(node.y + driftY), puff, puff, smokeColor);
+    if (i < 2) {
+      ctx.globalAlpha = 0.15 * (1 - cycle);
+      px(Math.round(node.x + driftX - 1), Math.round(node.y + driftY + 1), 2, 2, glowColor);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawPlant(style, time, progress, loop) {
   drawCenteredPlant(() => drawNativePlant(style, time, progress, loop));
 }
@@ -1888,10 +1910,11 @@ function drawRoomPlayers(style) {
     px(x - 1, y - 9, 2, 2, player.spectator ? style.scene.groundDark : isBot ? style.css.accent2 : isLocal ? style.scene.glow : style.scene.accent);
     px(x - 3, y - 4, 6, 2, player.spectator ? style.scene.rock : isBot ? "#6a2b16" : isLocal ? style.scene.accent : style.scene.soldier.armor);
     const label = isBot ? "BOT" : player.id.slice(0, 8);
-    px(x - 7, y - 18, Math.min(34, label.length * 4 + 4), 5, "rgba(0, 0, 0, 0.62)");
+    px(x - 9, y - 21, Math.min(48, label.length * 5 + 6), 8, "rgba(0, 0, 0, 0.78)");
+    px(x - 9, y - 21, Math.min(48, label.length * 5 + 6), 1, isLocal ? style.scene.glow : style.scene.accent);
     ctx.fillStyle = style.css.text;
-    ctx.font = "5px monospace";
-    ctx.fillText(label, x - 6, y - 14);
+    ctx.font = "7px monospace";
+    ctx.fillText(label, x - 7, y - 15);
 
     if (isLocal && !player.spectator) {
       drawPlayerArrow(style, x, y, player.ready);
@@ -1900,13 +1923,19 @@ function drawRoomPlayers(style) {
 }
 
 function drawPlayerArrow(style, x, y, ready) {
-  const bob = Math.floor(Math.sin(performance.now() / 140) * 2);
-  const arrowY = y - 24 + bob;
+  const time = performance.now();
+  const bob = Math.floor(Math.sin(time / 180) * 2);
+  const arrowY = y - 32 + bob;
   const color = ready ? style.scene.glow : style.scene.accent;
-  px(x - 1, arrowY, 2, 5, color);
-  px(x - 3, arrowY + 4, 6, 2, color);
-  px(x - 2, arrowY + 6, 4, 2, color);
-  px(x, arrowY + 8, 1, 2, color);
+  const blink = 0.58 + 0.34 * (0.5 + Math.sin(time / 520) * 0.5);
+  ctx.globalAlpha = blink * 0.36;
+  px(x - 6, arrowY - 2, 12, 14, "rgba(0, 0, 0, 0.76)");
+  ctx.globalAlpha = blink;
+  px(x - 2, arrowY, 4, 7, color);
+  px(x - 6, arrowY + 5, 12, 3, color);
+  px(x - 4, arrowY + 8, 8, 3, color);
+  px(x - 2, arrowY + 11, 4, 3, color);
+  ctx.globalAlpha = 1;
 }
 
 function drawRoomObjectives(style, time) {
@@ -1928,22 +1957,27 @@ function drawRoomObjectives(style, time) {
       const pulse = Math.floor(Math.sin(time / (isRich ? 96 : 130) + node.x) * 1);
       const color = node.repaired ? style.scene.groundLight : isNegative ? "#ff4f36" : "#57d56c";
       const edge = node.repaired ? style.scene.groundDark : isClaimed ? style.css.text : isNegative ? "#5b1711" : "#153119";
+      const size = node.repaired ? 6 : node.size || (isRich ? 10 : 8);
+      const half = Math.floor(size / 2);
+      drawNodeSmoke(style, node, time, isNegative, isRich);
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
-      drawPixelCircle(node.x, node.y, node.repaired ? 3 : node.radius || (isRich ? 4 : 3) + pulse, color, edge);
-      drawPixelCircle(node.x, node.y, node.repaired ? 3 : (isRich ? 4 : 3) + pulse, color, edge);
-      px(node.x - 3, node.y - 3, 6, 6, node.repaired ? style.scene.groundDark : isNegative ? "#3a1512" : "#153119");
-      px(node.x - 1, node.y - 1, 2, 2, node.repaired ? style.scene.groundLight : style.css.text);
+      px(node.x - half - 1, node.y - half - 1, size + 2, size + 2, edge);
+      px(node.x - half, node.y - half, size, size, color);
+      px(node.x - half + 2, node.y - half + 2, Math.max(2, size - 4), Math.max(2, size - 4), node.repaired ? style.scene.groundDark : isNegative ? "#3a1512" : "#153119");
+      px(node.x - 1 + pulse, node.y - 1, 2, 2, node.repaired ? style.scene.groundLight : style.css.text);
       if (node.bonus && !node.repaired) {
-        px(node.x - 1, node.y - 7, 2, 2, style.css.text);
-        px(node.x - 1, node.y + 5, 2, 2, style.css.text);
-        px(node.x - 7, node.y - 1, 2, 2, style.css.text);
-        px(node.x + 5, node.y - 1, 2, 2, style.css.text);
+        px(node.x - 1, node.y - half - 5, 2, 3, style.css.text);
+        px(node.x - 1, node.y + half + 2, 2, 3, style.css.text);
+        px(node.x - half - 5, node.y - 1, 3, 2, style.css.text);
+        px(node.x + half + 2, node.y - 1, 3, 2, style.css.text);
       }
       ctx.fillStyle = style.css.text;
-      ctx.font = "6px monospace";
+      ctx.font = "8px monospace";
       const label = `${node.value > 0 ? "+" : ""}${formatNodeValue(node.value)}`;
-      px(node.x - 13, node.y - 18, 26, 8, "rgba(0, 0, 0, 0.62)");
-      ctx.fillText(label, node.x - 12, node.y - 12);
+      const labelWidth = Math.max(30, label.length * 5 + 6);
+      px(node.x - Math.floor(labelWidth / 2), node.y - 23, labelWidth, 11, "rgba(0, 0, 0, 0.78)");
+      px(node.x - Math.floor(labelWidth / 2), node.y - 23, labelWidth, 1, isNegative ? "#ff6b28" : style.scene.glow);
+      ctx.fillText(label, node.x - Math.floor(labelWidth / 2) + 3, node.y - 15);
       ctx.globalAlpha = 1;
     }
   }
@@ -1965,8 +1999,8 @@ function drawClaimTimers(style) {
     px(x - 10, y - 7, 20, 9, "rgba(0, 0, 0, 0.72)");
     px(x - 10, y - 7, Math.round(20 * Math.max(0, remainingMs / node.holdMs)), 2, style.scene.accent);
     ctx.fillStyle = style.css.text;
-    ctx.font = "6px monospace";
-    ctx.fillText(label, x - 8, y);
+    ctx.font = "7px monospace";
+    ctx.fillText(label, x - 9, y);
   }
 }
 

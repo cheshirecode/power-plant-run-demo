@@ -7,6 +7,7 @@ const SESSION_COOKIE = "ppr_session";
 const STATE_COOKIE = "ppr_oauth_state";
 const NEXT_COOKIE = "ppr_oauth_next";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
+const BOOTSTRAP_ADMIN_LOGINS = ["cheshirecode"];
 const ROUND_COUNTDOWN_MS = 15_000;
 const EXPLOSION_DURATION_MS = 3_300;
 const NODE_VALUE_MIN = 1.5;
@@ -17,8 +18,8 @@ const NODE_BONUS_COUNT_MIN = 3;
 const NODE_BONUS_COUNT_MAX = 4;
 const NODE_NEGATIVE_CHANCE = 0.32;
 const NODE_HOLD_SECONDS_PER_POINT = 0.5;
-const NODE_REPAIR_RADIUS_MIN = 6;
-const NODE_REPAIR_RADIUS_MAX = 9;
+const NODE_SIZE_MIN = 7;
+const NODE_SIZE_MAX = 10;
 const NODE_MIN_DISTANCE = 36;
 const NODE_MAX_VALUE_DISTANCE = 60;
 const NODE_MIN_VALUE_DISTANCE = 360;
@@ -26,14 +27,16 @@ const NODE_VALUE_DECIMALS = 2;
 const WORLD_WIDTH = 768;
 const WORLD_HEIGHT = 432;
 const BLAST_CENTER = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 };
-const BLAST_RADIUS_BASE = 46;
-const BLAST_RADIUS_JITTER = 5;
+const BLAST_RADIUS_BASE = 115;
+const BLAST_RADIUS_JITTER = 13;
 const MAX_PLAYERS = 4;
 const BOT_ID = "bot-1";
 const BOT_TICK_MS = 90;
 const BOT_STEP = 5.2;
 const BOT_ESCAPE_THRESHOLD_MS = 3_750;
 const BOT_POSITIVE_THRESHOLD_MS = 7_500;
+const PLAYER_CLAIM_HALF_WIDTH = 4;
+const PLAYER_CLAIM_HEIGHT = 11;
 const PLAYER_STATE_ALIVE = "alive";
 const PLAYER_STATE_INCAPACITATED = "incapacitated";
 const START_NODES = [
@@ -109,9 +112,39 @@ export class GameRoom {
     await this.advanceTimedPhase();
     const url = new URL(request.url);
     const roomMatch = url.pathname.match(/^\/(?:api|ws)\/rooms\/([^/]+)$/);
+    const adminRoomMatch = url.pathname.match(/^\/internal\/admin\/rooms\/([^/]+)$/);
+    if (adminRoomMatch && !this.roomState.id) {
+      this.roomState.id = adminRoomMatch[1].toLowerCase();
+      await this.persistRoomState();
+    }
     if (roomMatch && !this.roomState.id) {
       this.roomState.id = roomMatch[1].toLowerCase();
       await this.persistRoomState();
+    }
+    if (adminRoomMatch && request.headers.get("X-PPR-Internal-Admin") === "1") {
+      if (request.method === "GET") {
+        return json({ ok: true, room: this.roomState, summary: this.roomSummary() });
+      }
+      if (request.method === "POST") {
+        let payload = {};
+        try {
+          payload = await request.json();
+        } catch {
+          payload = {};
+        }
+        if (this.roomState.phase !== "lobby" || Object.keys(this.roomState.players).length > 0) {
+          return json({ error: "Only empty lobby rooms can be configured" }, 409);
+        }
+        this.roomState.targetPlayerCount = clampNumber(payload.playerCount, 1, MAX_PLAYERS);
+        this.roomState.botEnabled = Boolean(payload.botEnabled);
+        await this.persistRoomState();
+        return json({ ok: true, room: this.roomState, summary: this.roomSummary() });
+      }
+      if (request.method === "DELETE") {
+        await this.closeRoom();
+        return json({ ok: true, room: this.roomSummary() });
+      }
+      return json({ error: "Method not allowed" }, 405);
     }
     if (request.headers.get("X-PPR-Room-Status") === "1") {
       return json({ ok: true, room: this.roomSummary() });
@@ -670,6 +703,43 @@ export class RoomDirectory {
   }
 }
 
+export class AdminConfig {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname !== "/internal/admin/config") {
+      return json({ error: "Not found" }, 404);
+    }
+
+    if (request.method === "GET") {
+      return json({ logins: await this.readLogins() });
+    }
+
+    if (request.method === "PUT") {
+      let payload;
+      try {
+        payload = await request.json();
+      } catch {
+        return json({ error: "Invalid JSON" }, 400);
+      }
+
+      const logins = normalizeAdminLogins(payload.logins);
+      await this.state.storage.put("adminLogins", logins);
+      return json({ ok: true, logins });
+    }
+
+    return json({ error: "Method not allowed" }, 405);
+  }
+
+  async readLogins() {
+    return normalizeAdminLogins((await this.state.storage.get("adminLogins")) || []);
+  }
+}
+
 function cloneNodes() {
   assertNodeSpacing(START_NODES);
   const bonusNodeIds = chooseBonusNodeIds();
@@ -682,7 +752,7 @@ function cloneNodes() {
       bonus,
       negative: value < 0,
       value,
-      radius: nodeRadius(value, bonus),
+      size: nodeSize(value, bonus),
       holdMs: nodeHoldMs(value),
       seed: Math.random() + index,
     };
@@ -720,11 +790,11 @@ function regularNodeValue(node) {
   return clampNumber(NODE_VALUE_MIN + closeness * (NODE_VALUE_MAX - NODE_VALUE_MIN), NODE_VALUE_MIN, NODE_VALUE_MAX);
 }
 
-function nodeRadius(value, bonus = false) {
-  if (bonus) return NODE_REPAIR_RADIUS_MAX;
+function nodeSize(value, bonus = false) {
+  if (bonus) return NODE_SIZE_MAX;
   const magnitude = Math.abs(value);
   const scale = (magnitude - NODE_VALUE_MIN) / (NODE_VALUE_MAX - NODE_VALUE_MIN);
-  return Math.round(NODE_REPAIR_RADIUS_MIN + scale * (NODE_REPAIR_RADIUS_MAX - NODE_REPAIR_RADIUS_MIN));
+  return Math.round(NODE_SIZE_MIN + scale * (NODE_SIZE_MAX - NODE_SIZE_MIN));
 }
 
 function nodeHoldMs(value) {
@@ -732,7 +802,16 @@ function nodeHoldMs(value) {
 }
 
 function isInsideNode(player, node) {
-  return distanceToNode(player, node) <= node.radius;
+  const nodeHalf = Math.ceil((node.size || NODE_SIZE_MIN) / 2);
+  const playerLeft = player.x - PLAYER_CLAIM_HALF_WIDTH;
+  const playerRight = player.x + PLAYER_CLAIM_HALF_WIDTH;
+  const playerTop = player.y - PLAYER_CLAIM_HEIGHT;
+  const playerBottom = player.y;
+  const nodeLeft = node.x - nodeHalf;
+  const nodeRight = node.x + nodeHalf;
+  const nodeTop = node.y - nodeHalf;
+  const nodeBottom = node.y + nodeHalf;
+  return playerRight >= nodeLeft && playerLeft <= nodeRight && playerBottom >= nodeTop && playerTop <= nodeBottom;
 }
 
 function distanceToNode(player, node) {
@@ -766,6 +845,10 @@ function getDirectory(env) {
   return env.DIRECTORY.get(env.DIRECTORY.idFromName("global"));
 }
 
+function getAdminConfig(env) {
+  return env.ADMIN_CONFIG.get(env.ADMIN_CONFIG.idFromName("global"));
+}
+
 async function registerRoom(env, roomId) {
   try {
     await getDirectory(env).fetch(`https://internal/directory?roomId=${roomId}`, { method: "POST" });
@@ -790,6 +873,116 @@ async function listRoomIds(env) {
     return Array.isArray(payload.roomIds) ? payload.roomIds : [];
   } catch {
     return [];
+  }
+}
+
+async function readAdminWhitelist(env) {
+  try {
+    const response = await getAdminConfig(env).fetch("https://internal/internal/admin/config");
+    if (!response.ok) return [];
+    const payload = await response.json();
+    return normalizeAdminLogins(payload.logins);
+  } catch {
+    return [];
+  }
+}
+
+async function writeAdminWhitelist(env, logins) {
+  const response = await getAdminConfig(env).fetch("https://internal/internal/admin/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ logins }),
+  });
+  if (!response.ok) {
+    const payload = await safeJson(response);
+    throw new Error(payload.error || "Admin whitelist update failed");
+  }
+  const payload = await response.json();
+  return normalizeAdminLogins(payload.logins);
+}
+
+function normalizeAdminLogins(logins) {
+  if (!Array.isArray(logins)) return [];
+  return [
+    ...new Set(
+      logins
+        .map((login) => String(login || "").trim().toLowerCase())
+        .filter((login) => PLAYER_ID_PATTERN.test(login)),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+}
+
+async function requireAdmin(request, env) {
+  const session = await readSession(request, env);
+  if (!session) {
+    return { response: json({ error: "Sign in required" }, 401) };
+  }
+
+  const login = String(session.user?.login || "").toLowerCase();
+  const whitelist = await readAdminWhitelist(env);
+  const bootstrapLogins = normalizeAdminLogins(BOOTSTRAP_ADMIN_LOGINS);
+  const isAdmin = bootstrapLogins.includes(login) || whitelist.includes(login);
+  if (!isAdmin) {
+    return { response: json({ error: "Admin access required" }, 403), session, whitelist };
+  }
+
+  return { session, login, whitelist, bootstrapLogins };
+}
+
+async function adminRoomState(env, roomId) {
+  const room = env.ROOMS.get(env.ROOMS.idFromName(roomId));
+  const response = await room.fetch(
+    new Request(`https://internal/internal/admin/rooms/${roomId}`, {
+      headers: { "X-PPR-Internal-Admin": "1" },
+    }),
+  );
+  if (!response.ok) {
+    const payload = await safeJson(response);
+    throw new Error(payload.error || `Room ${roomId} unavailable`);
+  }
+  return response.json();
+}
+
+async function adminConfigureRoom(env, roomId, options) {
+  const room = env.ROOMS.get(env.ROOMS.idFromName(roomId));
+  const response = await room.fetch(
+    new Request(`https://internal/internal/admin/rooms/${roomId}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-PPR-Internal-Admin": "1",
+      },
+      body: JSON.stringify(options),
+    }),
+  );
+  if (!response.ok) {
+    const payload = await safeJson(response);
+    throw new Error(payload.error || `Room ${roomId} configure failed`);
+  }
+  return response.json();
+}
+
+async function adminDeleteRoom(env, roomId) {
+  const room = env.ROOMS.get(env.ROOMS.idFromName(roomId));
+  const response = await room.fetch(
+    new Request(`https://internal/internal/admin/rooms/${roomId}`, {
+      method: "DELETE",
+      headers: { "X-PPR-Internal-Admin": "1" },
+    }),
+  );
+  if (!response.ok) {
+    const payload = await safeJson(response);
+    throw new Error(payload.error || `Room ${roomId} delete failed`);
+  }
+  await forgetRoom(env, roomId);
+  return response.json();
+}
+
+async function safeJson(response) {
+  try {
+    return await response.json();
+  } catch {
+    return {};
   }
 }
 
@@ -835,6 +1028,126 @@ export default {
       return redirect("/", {
         "Set-Cookie": expireCookie(SESSION_COOKIE),
       });
+    }
+
+    if (url.pathname === "/admin" || url.pathname === "/admin.html") {
+      return html(adminPage());
+    }
+
+    if (url.pathname === "/api/admin/me") {
+      const admin = await requireAdmin(request, env);
+      if (admin.response) return admin.response;
+      return json({
+        authenticated: true,
+        admin: true,
+        user: admin.session.user,
+        bootstrapLogins: admin.bootstrapLogins,
+      });
+    }
+
+    if (url.pathname === "/api/admin/whitelist") {
+      const admin = await requireAdmin(request, env);
+      if (admin.response) return admin.response;
+
+      if (request.method === "GET") {
+        return json({
+          logins: admin.whitelist,
+          bootstrapLogins: admin.bootstrapLogins,
+        });
+      }
+
+      if (request.method === "PUT") {
+        let payload;
+        try {
+          payload = await request.json();
+        } catch {
+          return json({ error: "Invalid JSON" }, 400);
+        }
+        const logins = normalizeAdminLogins(payload.logins);
+        const savedLogins = await writeAdminWhitelist(env, logins);
+        return json({
+          ok: true,
+          logins: savedLogins,
+          bootstrapLogins: admin.bootstrapLogins,
+        });
+      }
+
+      return json({ error: "Method not allowed" }, 405);
+    }
+
+    if (url.pathname === "/api/admin/rooms" && request.method === "GET") {
+      const admin = await requireAdmin(request, env);
+      if (admin.response) return admin.response;
+
+      const rooms = [];
+      for (const roomId of await listRoomIds(env)) {
+        try {
+          const state = await adminRoomState(env, roomId);
+          rooms.push({
+            ...state.summary,
+            closed: Boolean(state.summary?.closed),
+          });
+        } catch (error) {
+          rooms.push({
+            id: roomId,
+            phase: "unavailable",
+            error: error.message,
+            closed: false,
+          });
+        }
+      }
+      rooms.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      return json({ rooms });
+    }
+
+    if (url.pathname === "/api/admin/rooms" && request.method === "POST") {
+      const admin = await requireAdmin(request, env);
+      if (admin.response) return admin.response;
+
+      let payload = {};
+      try {
+        payload = await request.json();
+      } catch {
+        payload = {};
+      }
+      const requestedRoomId = String(payload.roomId || "").trim().toLowerCase();
+      const roomId = requestedRoomId || crypto.randomUUID().slice(0, 8);
+      if (!ROOM_ID_PATTERN.test(roomId)) {
+        return json({ error: "Invalid room id" }, 400);
+      }
+
+      await registerRoom(env, roomId);
+      await adminConfigureRoom(env, roomId, {
+        playerCount: payload.playerCount,
+        botEnabled: payload.botEnabled,
+      });
+      return json({
+        ok: true,
+        roomId,
+        targetPlayerCount: clampNumber(payload.playerCount, 1, MAX_PLAYERS),
+        botEnabled: Boolean(payload.botEnabled),
+      });
+    }
+
+    const adminRoomMatch = url.pathname.match(/^\/api\/admin\/rooms\/([^/]+)$/);
+    if (adminRoomMatch) {
+      const admin = await requireAdmin(request, env);
+      if (admin.response) return admin.response;
+
+      const roomId = adminRoomMatch[1].toLowerCase();
+      if (!ROOM_ID_PATTERN.test(roomId)) {
+        return json({ error: "Invalid room id" }, 400);
+      }
+
+      if (request.method === "GET") {
+        return json(await adminRoomState(env, roomId));
+      }
+
+      if (request.method === "DELETE") {
+        return json(await adminDeleteRoom(env, roomId));
+      }
+
+      return json({ error: "Method not allowed" }, 405);
     }
 
     if (url.pathname === "/api/rooms" && request.method === "GET") {
@@ -1129,6 +1442,50 @@ function redirect(location, headers = {}) {
   });
 }
 
+function adminPage() {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Power Plant Run Admin</title>
+    <link rel="icon" href="./icons/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .admin-shell{width:min(1480px,100%);margin:0 auto;padding:22px}.admin-header{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:18px}.admin-home{color:var(--muted);font-size:.74rem;text-decoration:none;text-transform:uppercase}.admin-auth{display:flex;align-items:center;justify-content:flex-end;gap:8px}.admin-auth span{max-width:220px;overflow:hidden;color:var(--muted);font-size:.78rem;text-overflow:ellipsis;white-space:nowrap}.admin-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:16px;align-items:start}.admin-panel{border:1px solid var(--border);background:color-mix(in srgb,var(--panel-bg) 90%,#000);box-shadow:0 16px 36px var(--shadow);padding:16px}.admin-state-panel{grid-column:1/-1}.admin-panel-header{display:flex;align-items:start;justify-content:space-between;gap:12px}.admin-panel h2{margin:0;font-size:1rem;line-height:1.1}.admin-panel p{margin:7px 0 0;color:var(--muted);font-size:.68rem;line-height:1.35}.admin-form{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:14px 0}.admin-form label{display:grid;gap:4px}.admin-form label span{color:var(--muted);font-size:.56rem;line-height:1;text-transform:uppercase}.admin-form input,.admin-form select{min-height:34px;border:1px solid color-mix(in srgb,var(--border) 78%,#000);background:color-mix(in srgb,var(--panel-strong) 78%,#000);color:var(--text);font:inherit;font-size:.74rem;padding:0 8px}.admin-form-wide{flex:1 1 180px}.admin-form-wide input{width:100%}.admin-check{display:inline-flex!important;grid-template-columns:auto auto;gap:7px!important;min-height:34px;align-items:center;padding:0 9px;border:1px solid color-mix(in srgb,var(--border) 78%,#000);background:color-mix(in srgb,var(--panel-strong) 62%,#000)}.admin-check input{min-height:0;accent-color:var(--accent)}.admin-table-wrap{overflow:auto}.admin-table{width:100%;min-width:760px;border-collapse:collapse}.admin-table th,.admin-table td{padding:8px;border-bottom:1px solid color-mix(in srgb,var(--border) 62%,#000);font-size:.62rem;line-height:1.25;text-align:left;vertical-align:middle}.admin-table th{color:var(--muted);font-size:.54rem;text-transform:uppercase}.admin-actions{display:flex;flex-wrap:wrap;gap:6px}.whitelist-list{display:grid;gap:6px}.whitelist-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px;border:1px solid color-mix(in srgb,var(--border) 62%,#000);background:rgba(0,0,0,.25)}.whitelist-row span{min-width:0;overflow:hidden;font-size:.7rem;text-overflow:ellipsis;white-space:nowrap}#room-state-view{max-height:360px;overflow:auto;margin:14px 0 0;padding:12px;border:1px solid color-mix(in srgb,var(--border) 72%,#000);background:rgba(0,0,0,.36);color:var(--text);font-size:.62rem;line-height:1.45;white-space:pre-wrap}@media (max-width:980px){.admin-grid,.admin-state-panel{display:grid;grid-template-columns:1fr}.admin-state-panel{grid-column:auto}}@media (max-width:680px){.admin-shell{padding:14px}.admin-header{align-items:stretch;flex-direction:column}.admin-auth{justify-content:flex-start}}
+    </style>
+  </head>
+  <body>
+    <main class="admin-shell">
+      <header class="admin-header">
+        <div><a href="/" class="admin-home">Power Plant Run</a><h1>Room Admin</h1></div>
+        <div class="admin-auth"><span id="admin-status">Checking access...</span><button class="control-button" type="button" id="admin-login-button"><span class="button-icon icon-github" aria-hidden="true"></span><span class="button-label">GitHub</span></button><button class="control-button is-hidden" type="button" id="admin-logout-button"><span class="button-icon icon-logout" aria-hidden="true"></span><span class="button-label">Logout</span></button></div>
+      </header>
+      <section class="admin-panel" id="admin-denied" hidden><h2>Admin access required</h2><p>Sign in with an authorized GitHub account to manage rooms.</p></section>
+      <section class="admin-grid" id="admin-app" hidden>
+        <section class="admin-panel">
+          <div class="admin-panel-header"><div><h2>Rooms</h2><p id="rooms-note">Known room directory entries, including closed or stale sessions.</p></div><button class="control-button" type="button" id="refresh-rooms-button"><span class="button-icon icon-replay" aria-hidden="true"></span><span class="button-label">Refresh</span></button></div>
+          <form class="admin-form" id="create-room-form"><label><span>Room code</span><input id="admin-room-id" type="text" maxlength="40" placeholder="auto" autocomplete="off" /></label><label><span>Players</span><select id="admin-player-count"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option></select></label><label class="admin-check"><input id="admin-bot-enabled" type="checkbox" /><span>Bot</span></label><button class="control-button" type="submit"><span class="button-icon icon-plus" aria-hidden="true"></span><span class="button-label">Create</span></button></form>
+          <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Room</th><th>Phase</th><th>Players</th><th>Owner</th><th>Cycle</th><th>Flags</th><th>Actions</th></tr></thead><tbody id="rooms-table-body"></tbody></table></div>
+        </section>
+        <section class="admin-panel">
+          <h2>Whitelist</h2><p id="whitelist-note">Bootstrap admin remains cheshirecode. Add GitHub logins here for DB-driven admin access.</p>
+          <form class="admin-form" id="whitelist-form"><label class="admin-form-wide"><span>GitHub login</span><input id="whitelist-login" type="text" maxlength="40" autocomplete="off" placeholder="octocat" /></label><button class="control-button" type="submit"><span class="button-icon icon-plus" aria-hidden="true"></span><span class="button-label">Add</span></button></form>
+          <div class="whitelist-list" id="whitelist-list"></div>
+        </section>
+        <section class="admin-panel admin-state-panel">
+          <div class="admin-panel-header"><div><h2>Room State</h2><p>Inspect-only JSON for the selected room.</p></div><button class="control-button" type="button" id="clear-state-button"><span class="button-icon icon-end" aria-hidden="true"></span><span class="button-label">Clear</span></button></div>
+          <pre id="room-state-view">Select a room to inspect.</pre>
+        </section>
+      </section>
+    </main>
+    <script type="module">
+      const statusText=document.querySelector("#admin-status"),loginButton=document.querySelector("#admin-login-button"),logoutButton=document.querySelector("#admin-logout-button"),deniedPanel=document.querySelector("#admin-denied"),appPanel=document.querySelector("#admin-app"),roomsBody=document.querySelector("#rooms-table-body"),roomsNote=document.querySelector("#rooms-note"),refreshRoomsButton=document.querySelector("#refresh-rooms-button"),createRoomForm=document.querySelector("#create-room-form"),roomIdInput=document.querySelector("#admin-room-id"),playerCountInput=document.querySelector("#admin-player-count"),botEnabledInput=document.querySelector("#admin-bot-enabled"),whitelistForm=document.querySelector("#whitelist-form"),whitelistInput=document.querySelector("#whitelist-login"),whitelistList=document.querySelector("#whitelist-list"),whitelistNote=document.querySelector("#whitelist-note"),roomStateView=document.querySelector("#room-state-view"),clearStateButton=document.querySelector("#clear-state-button");let whitelist=[],bootstrapLogins=[];loginButton.addEventListener("click",()=>{window.location.href="/api/auth/github/login?next="+encodeURIComponent("/admin")});logoutButton.addEventListener("click",()=>{window.location.href="/api/auth/logout"});refreshRoomsButton.addEventListener("click",()=>loadRooms());clearStateButton.addEventListener("click",()=>{roomStateView.textContent="Select a room to inspect."});createRoomForm.addEventListener("submit",async e=>{e.preventDefault();try{const r=await fetch("/api/admin/rooms",{method:"POST",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({roomId:roomIdInput.value.trim().toLowerCase(),playerCount:playerCountInput.value,botEnabled:botEnabledInput.checked})}),p=await r.json();if(!r.ok)throw new Error(p.error||"Room create failed");roomIdInput.value="";roomsNote.textContent="Created "+p.roomId+".";await loadRooms()}catch(r){roomsNote.textContent=r.message}});whitelistForm.addEventListener("submit",async e=>{e.preventDefault();const login=String(whitelistInput.value||"").trim().toLowerCase();if(!login)return;await saveWhitelist([...new Set([...whitelist,login])]);whitelistInput.value=""});init();async function init(){try{const r=await fetch("/api/admin/me",{headers:{Accept:"application/json"}}),p=await r.json();if(r.status===401){showDenied("Signed out");return}if(!r.ok){showDenied(p.error||"Admin access required");return}statusText.textContent="@"+p.user.login;loginButton.classList.add("is-hidden");logoutButton.classList.remove("is-hidden");deniedPanel.hidden=true;appPanel.hidden=false;await Promise.all([loadWhitelist(),loadRooms()])}catch{showDenied("Admin API unavailable")}}function showDenied(message){statusText.textContent=message;loginButton.classList.remove("is-hidden");logoutButton.classList.add("is-hidden");deniedPanel.hidden=false;appPanel.hidden=true}async function loadRooms(){roomsBody.replaceChildren(rowMessage("Loading rooms..."));try{const r=await fetch("/api/admin/rooms",{headers:{Accept:"application/json"}}),p=await r.json();if(!r.ok)throw new Error(p.error||"Rooms unavailable");const rooms=Array.isArray(p.rooms)?p.rooms:[];roomsNote.textContent=rooms.length+" room"+(rooms.length===1?"":"s")+" in the directory.";renderRooms(rooms)}catch(r){roomsBody.replaceChildren(rowMessage(r.message))}}function renderRooms(rooms){roomsBody.replaceChildren();if(rooms.length===0){roomsBody.append(rowMessage("No rooms in the directory."));return}for(const room of rooms){const row=document.createElement("tr");row.append(cell(room.id||"unknown"),cell(room.phase||"unknown"),cell(playerLabel(room)),cell(room.ownerId||"-"),cell(String(room.cycle??"-")),cell(flagsLabel(room)),actionsCell(room));roomsBody.append(row)}}function actionsCell(room){const item=document.createElement("td"),actions=document.createElement("div");actions.className="admin-actions";const inspect=button("Inspect","icon-session");inspect.addEventListener("click",()=>inspectRoom(room.id));const del=button("Delete","icon-end");del.addEventListener("click",()=>deleteRoom(room.id));actions.append(inspect,del);item.append(actions);return item}async function inspectRoom(roomId){roomStateView.textContent="Loading...";try{const r=await fetch("/api/admin/rooms/"+encodeURIComponent(roomId),{headers:{Accept:"application/json"}}),p=await r.json();if(!r.ok)throw new Error(p.error||"Room unavailable");roomStateView.textContent=JSON.stringify(p.room||p,null,2)}catch(r){roomStateView.textContent=r.message}}async function deleteRoom(roomId){try{const r=await fetch("/api/admin/rooms/"+encodeURIComponent(roomId),{method:"DELETE",headers:{Accept:"application/json"}}),p=await r.json();if(!r.ok)throw new Error(p.error||"Delete failed");roomsNote.textContent="Deleted "+roomId+".";await loadRooms()}catch(r){roomsNote.textContent=r.message}}async function loadWhitelist(){try{const r=await fetch("/api/admin/whitelist",{headers:{Accept:"application/json"}}),p=await r.json();if(!r.ok)throw new Error(p.error||"Whitelist unavailable");whitelist=Array.isArray(p.logins)?p.logins:[];bootstrapLogins=Array.isArray(p.bootstrapLogins)?p.bootstrapLogins:[];renderWhitelist()}catch(r){whitelistNote.textContent=r.message}}async function saveWhitelist(next){try{const r=await fetch("/api/admin/whitelist",{method:"PUT",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({logins:next})}),p=await r.json();if(!r.ok)throw new Error(p.error||"Whitelist update failed");whitelist=Array.isArray(p.logins)?p.logins:[];bootstrapLogins=Array.isArray(p.bootstrapLogins)?p.bootstrapLogins:[];whitelistNote.textContent="Whitelist saved.";renderWhitelist()}catch(r){whitelistNote.textContent=r.message}}function renderWhitelist(){whitelistList.replaceChildren();whitelistNote.textContent="Bootstrap: "+(bootstrapLogins.map(l=>"@"+l).join(", ")||"none")+".";const rows=[...bootstrapLogins.map(login=>({login,bootstrap:true})),...whitelist.map(login=>({login,bootstrap:false}))];if(rows.length===0){whitelistList.textContent="No admin logins configured.";return}for(const row of rows){const item=document.createElement("div");item.className="whitelist-row";const label=document.createElement("span");label.textContent="@"+row.login+(row.bootstrap?" · bootstrap":"");item.append(label);if(!row.bootstrap){const remove=button("Remove","icon-end");remove.addEventListener("click",()=>saveWhitelist(whitelist.filter(login=>login!==row.login)));item.append(remove)}whitelistList.append(item)}}function flagsLabel(room){const flags=[];if(room.closed)flags.push("closed");if(room.botEnabled||room.botCount)flags.push("bot");if(room.error)flags.push("error");if(room.spectatorCount)flags.push(room.spectatorCount+" watching");return flags.length?flags.join(" · "):"-"}function playerLabel(room){return (room.activeCount??0)+"/"+(room.targetPlayerCount??0)+(room.botCount?" + "+room.botCount+" bot":"")}function rowMessage(message){const row=document.createElement("tr"),item=document.createElement("td");item.colSpan=7;item.textContent=message;row.append(item);return row}function cell(value){const item=document.createElement("td");item.textContent=value;return item}function button(label,iconClass){const item=document.createElement("button");item.type="button";item.className="control-button";const icon=document.createElement("span");icon.className="button-icon "+iconClass;icon.setAttribute("aria-hidden","true");const text=document.createElement("span");text.className="button-label";text.textContent=label;item.append(icon,text);return item}
+    </script>
+  </body>
+</html>`;
+}
+
 function base64UrlEncode(value) {
   return btoa(value).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
@@ -1144,6 +1501,16 @@ function json(body, status = 200) {
     status,
     headers: {
       "Cache-Control": "no-store",
+    },
+  });
+}
+
+function html(body, status = 200) {
+  return new Response(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/html; charset=utf-8",
     },
   });
 }

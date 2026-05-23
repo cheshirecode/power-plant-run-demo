@@ -51,13 +51,15 @@ button {
   min-width: 0;
   margin: 0 auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 14px;
 }
 
 .topbar > div:first-child {
-  flex: 0 0 auto;
+  flex: 0 1 max-content;
+  min-width: min(100%, 390px);
 }
 
 h1 {
@@ -79,12 +81,12 @@ h1 {
 .controls {
   display: flex;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 720px;
   max-width: none;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
-  flex-wrap: nowrap;
+  gap: 6px;
+  flex-wrap: wrap;
   overflow: visible;
   padding: 4px;
   border: 1px solid var(--border);
@@ -104,14 +106,15 @@ h1 {
   display: flex;
   min-width: 0;
   min-height: 34px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 0;
 }
 
 .session-status {
-  max-width: 96px;
+  max-width: clamp(110px, 16vw, 180px);
   overflow: hidden;
   color: var(--muted);
   font-size: 0.72rem;
@@ -121,13 +124,13 @@ h1 {
 }
 
 #room-status {
-  max-width: 88px;
+  max-width: clamp(92px, 12vw, 160px);
 }
 
 .room-field {
   position: relative;
   display: block;
-  width: 126px;
+  width: clamp(126px, 14vw, 190px);
   min-width: 112px;
 }
 
@@ -787,7 +790,7 @@ h1 {
   .controls {
     justify-content: flex-start;
     max-width: 100%;
-    overflow-x: auto;
+    overflow-x: visible;
     overflow-y: visible;
   }
 
