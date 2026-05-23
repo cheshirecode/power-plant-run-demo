@@ -196,21 +196,22 @@ const plantPalettes = {
 const LOOP_DURATION = 30000;
 const EXPLOSION_START = 22000;
 const ESCAPE_START = 21200;
-const REBUILD_START = 25000;
-const REBUILD_END = 30000;
+const REBUILD_START = EXPLOSION_START + 1100;
+const REBUILD_END = LOOP_DURATION;
 const DEMO_TIME_SCALE = 1;
 const DEMO_REPAIR_DURATION = 20000;
 const DEMO_NODE_SPAWN_MS = 2000;
 const DEMO_INITIAL_NODE_COUNT = 20;
 const DEMO_RUNNER_SPEED = 2.15;
 const DEMO_ESCAPE_THRESHOLD_MS = 4800;
-const DEMO_STASIS_RADIUS = 62;
-const DEMO_STASIS_PULSE_MS = 420;
+const DEMO_STASIS_RADIUS = 138;
+const DEMO_STASIS_PULSE_MS = 260;
+const DEMO_STASIS_FREEZE_MS = 1000;
 const DEMO_NODE_TIMER_FACTOR_MS = 900;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
-const DEMO_SUMMARY_START = EXPLOSION_START + 1400;
-const DEMO_VORTEX_START = REBUILD_END - 1800;
+const DEMO_SUMMARY_START = EXPLOSION_START + 650;
+const DEMO_VORTEX_START = EXPLOSION_START + 2500;
 const DEMO_PATH_POINTS = [
   { x: 0, y: 354 },
   { x: 118, y: 310 },
@@ -250,7 +251,7 @@ const demoAbilities = [
   { id: "boost", label: "BOOST", name: "Overclock Boots", color: "#70a8ff", accent: "#f1e8cf" },
   { id: "magnet", label: "MAG", name: "Magnet Gloves", color: "#57d56c", accent: "#d7ffd8" },
   { id: "stasis", label: "FREEZE", name: "Stasis Popper", color: "#9fdfff", accent: "#f1e8cf" },
-  { id: "blink", label: "BLINK", name: "Smoke Dash", color: "#d5983b", accent: "#f1e8cf" },
+  { id: "warp", label: "WARP", name: "Portal Boots", color: "#d5983b", accent: "#f1e8cf" },
   { id: "greed", label: "GREED", name: "Greedy Wrench", color: "#ff6b28", accent: "#ffe28f" },
 ];
 
@@ -675,6 +676,29 @@ function getDemoNodePlan(member, index, cycle) {
   const cacheKey = `${cycle}:${member.id}`;
   if (demoNodePlanCache.has(cacheKey)) return demoNodePlanCache.get(cacheKey);
 
+  const candidates = getDemoNodeCandidates(member, index, cycle);
+  const reserved = new Set();
+  for (let i = 0; i < index; i += 1) {
+    const prior = squad[i];
+    if (!prior) continue;
+    for (const node of getDemoNodePlan(prior, i, cycle).slice(0, 3)) {
+      reserved.add(node.id);
+    }
+  }
+
+  const plan = [];
+  for (const node of candidates) {
+    if (!reserved.has(node.id) && !plan.some((chosen) => chosen.id === node.id)) plan.push(node);
+    if (plan.length >= 5) break;
+  }
+  for (const node of candidates) {
+    if (!plan.some((chosen) => chosen.id === node.id)) plan.push(node);
+    if (plan.length >= 5) break;
+  }
+  return cacheDemoNodePlan(cacheKey, plan);
+}
+
+function getDemoNodeCandidates(member, index, cycle) {
   const ability = getDemoAbility(member, cycle);
   const visibleNodes = getDemoVisibleNodes(cycle, EXPLOSION_START);
   const spawn = member.spawn;
@@ -683,27 +707,21 @@ function getDemoNodePlan(member, index, cycle) {
   const byPositive = (a, b) => b.value - a.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
 
   if (ability.id === "greed") {
-    return cacheDemoNodePlan(cacheKey, [...visibleNodes].sort(byRiches).slice(0, 5));
+    return [...visibleNodes].sort(byRiches);
   }
   if (ability.id === "stasis") {
-    return cacheDemoNodePlan(cacheKey, [...visibleNodes].sort(byPressure).slice(0, 5));
+    return [...visibleNodes].sort(byPressure);
   }
   if (ability.id === "boost") {
-    return cacheDemoNodePlan(cacheKey, [...visibleNodes].filter((node) => node.value > 0).sort(byPositive).slice(0, 5));
+    return [...visibleNodes].filter((node) => node.value > 0).sort(byPositive);
   }
   if (ability.id === "magnet") {
-    return cacheDemoNodePlan(
-      cacheKey,
-      [...visibleNodes].sort((a, b) => Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y)).slice(0, 5),
-    );
+    return [...visibleNodes].sort((a, b) => Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y));
   }
 
   const start = Math.floor(hash2d(index + 3, cycle + 7, member.id.length) * visibleNodes.length);
   const stride = 2 + (index % 3);
-  return cacheDemoNodePlan(
-    cacheKey,
-    [0, 1, 2, 3, 4].map((offset) => visibleNodes[(start + offset * stride) % visibleNodes.length]).filter(Boolean),
-  );
+  return Array.from({ length: visibleNodes.length }, (_, offset) => visibleNodes[(start + offset * stride) % visibleNodes.length]).filter(Boolean);
 }
 
 function cacheDemoNodePlan(cacheKey, plan) {
@@ -715,20 +733,21 @@ function getDemoEscapeThresholdMs(ability) {
   if (ability.id === "greed") return DEMO_ESCAPE_THRESHOLD_MS * 0.58;
   if (ability.id === "stasis") return DEMO_ESCAPE_THRESHOLD_MS * 0.72;
   if (ability.id === "boost") return DEMO_ESCAPE_THRESHOLD_MS * 0.78;
-  if (ability.id === "blink") return DEMO_ESCAPE_THRESHOLD_MS * 0.84;
+  if (ability.id === "warp") return DEMO_ESCAPE_THRESHOLD_MS * 0.76;
   return DEMO_ESCAPE_THRESHOLD_MS;
 }
 
 function getDemoPathSpeed(ability) {
-  const abilitySpeed = ability.id === "boost" ? 1.22 : ability.id === "blink" ? 1.1 : 1;
+  const abilitySpeed = ability.id === "boost" ? 1.22 : ability.id === "warp" ? 1.18 : 1;
   return DEMO_RUNNER_SPEED * abilitySpeed;
 }
 
 function getDemoHoldDurationMs(node, ability) {
   const magnitude = Math.abs(node.value);
   const highValue = magnitude >= 6 || node.bonus;
-  const abilityFactor = ability.id === "greed" && highValue ? 0.26 : ability.id === "greed" ? 0.46 : ability.id === "magnet" ? 0.62 : 0.68;
-  return Math.max(1150, Math.round(node.holdMs * abilityFactor));
+  const abilityFactor = ability.id === "greed" && highValue ? 0.12 : ability.id === "greed" ? 0.46 : ability.id === "magnet" ? 0.62 : 0.68;
+  const minimumHold = ability.id === "greed" && highValue ? 360 : 1150;
+  return Math.max(minimumHold, Math.round(node.holdMs * abilityFactor));
 }
 
 function getDemoRouteState(member, index, cycle, elapsed) {
@@ -840,8 +859,8 @@ function getDemoActorState(member, index, loop, time) {
     stasisSources.some((source) => Math.hypot(source.x - currentPosition.x, source.y - currentPosition.y) <= DEMO_STASIS_RADIUS);
 
   if (loop.elapsed < EXPLOSION_START) {
-    const blinkHop = ability.id === "blink" && loop.elapsed % 1800 < 220 ? 0.045 : 0;
-    const adjustedElapsed = Math.max(0, loop.elapsed + blinkHop * 2400 - (frozen ? 850 : 0));
+    const warpHop = ability.id === "warp" && loop.elapsed % 1800 < 320 ? 0.18 : 0;
+    const adjustedElapsed = Math.max(0, loop.elapsed + warpHop * 2400 - (frozen ? 850 : 0));
     const position = getDemoPlayPosition(member, index, loop.cycle, adjustedElapsed);
     return {
       ...position,
@@ -905,7 +924,7 @@ function isDemoStasisPulseActive(elapsed, cycle) {
 }
 
 function getDemoStasisPulseSources(elapsed, cycle) {
-  if (elapsed >= EXPLOSION_START || elapsed % 3000 >= DEMO_STASIS_PULSE_MS) return [];
+  if (elapsed >= EXPLOSION_START || elapsed % 3000 >= DEMO_STASIS_FREEZE_MS) return [];
   return squad
     .map((member, index) => ({ member, index, ability: getDemoAbility(member, cycle) }))
     .filter((entry) => entry.ability.id === "stasis")
@@ -2343,10 +2362,12 @@ function drawAbilityIcon(ability, x, y, size = 9) {
     px(x + 3, y + 3, size - 6, size - 6, accent);
     return;
   }
-  if (ability?.id === "blink") {
-    px(x + 1, y + 2, size - 4, 2, "#5f4728");
-    px(x + 4, y + 5, size - 5, 2, accent);
-    px(x + 2, y + size - 3, 3, 2, "#5f4728");
+  if (ability?.id === "warp") {
+    const mid = Math.floor(size / 2);
+    px(x + mid - 2, y + 1, 4, size - 2, "#5f4728");
+    px(x + 1, y + mid - 2, size - 2, 4, "#5f4728");
+    px(x + 3, y + 3, size - 6, size - 6, accent);
+    px(x + mid - 1, y + mid - 1, 2, 2, color);
     return;
   }
   if (ability?.id === "greed") {
@@ -2461,6 +2482,7 @@ function drawRoomObjectives(style, time, room = sessionState.room) {
         px(node.x + half + 1, node.y - half - 4, 3, 3, style.css.text);
         px(node.x - half - 4, node.y + half + 1, 3, 3, style.css.text);
         px(node.x + half + 1, node.y + half + 1, 3, 3, style.css.text);
+        drawClaimOwnerLock(style, room, node, time, isNegative);
       }
       drawNodeSmoke(style, node, time, isNegative, isRich);
       ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
@@ -2505,6 +2527,31 @@ function drawClaimTimers(style, room = sessionState.room) {
     ctx.font = "8px monospace";
     ctx.fillText(label, x - 12, y);
   }
+}
+
+function drawClaimOwnerLock(style, room, node, time, isNegative) {
+  const player = room.players?.[node.claimedBy];
+  const lockColor = isNegative ? "#ff6b28" : style.scene.glow;
+  if (Number.isFinite(player?.x) && Number.isFinite(player?.y)) {
+    ctx.globalAlpha = 0.28 + Math.sin(time / 160) * 0.06;
+    drawPixelLine(node.x, node.y, player.x, player.y - 12, 2, lockColor);
+    ctx.globalAlpha = 0.72;
+    px(player.x - 4, player.y - 29, 8, 2, lockColor);
+    px(player.x - 6, player.y - 27, 12, 2, style.css.text);
+  }
+
+  const owner = String(node.claimedBy || "").slice(0, 6).toUpperCase();
+  const width = Math.max(28, owner.length * 5 + 8);
+  const x = Math.round(node.x - width / 2);
+  const y = Math.round(node.y + (node.size || 8) + 8);
+  ctx.globalAlpha = 0.9;
+  px(x, y, width, 11, "rgba(0, 0, 0, 0.82)");
+  px(x, y, width, 2, lockColor);
+  px(x + 3, y + 4, 4, 4, lockColor);
+  ctx.fillStyle = style.css.text;
+  ctx.font = "6px monospace";
+  ctx.fillText(owner || "LOCK", x + 9, y + 9);
+  ctx.globalAlpha = 1;
 }
 
 function drawBuildingCountdown(style, time, room = sessionState.room) {
@@ -2730,10 +2777,21 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
   }
 
   if (actor.phase === "frozen") {
-    ctx.globalAlpha = 0.68;
-    px(x - 12, y - 31, 24, 23, "rgba(112, 168, 255, 0.42)");
-    px(x - 15, y - 22, 4, 4, style.scene.glow);
-    px(x + 12, y - 28, 3, 3, style.css.text);
+    ctx.globalAlpha = 0.74;
+    px(x - 15, y - 35, 30, 30, "rgba(112, 168, 255, 0.38)");
+    px(x - 17, y - 37, 34, 3, style.scene.glow);
+    px(x - 17, y - 8, 34, 3, style.scene.glow);
+    px(x - 17, y - 37, 3, 32, style.scene.glow);
+    px(x + 14, y - 37, 3, 32, style.scene.glow);
+    ctx.globalAlpha = 0.95;
+    px(x - 12, y - 32, 7, 3, style.css.text);
+    px(x + 5, y - 27, 8, 3, style.css.text);
+    px(x - 9, y - 13, 6, 3, actor.ability?.color || style.scene.glow);
+    px(x + 8, y - 18, 5, 5, style.scene.glow);
+    ctx.globalAlpha = 0.48;
+    for (let i = 0; i < 7; i += 1) {
+      px(x - 18 + i * 6, y - 42 - (i % 2) * 4, 2, 5, i % 2 ? style.css.text : style.scene.glow);
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -2763,14 +2821,21 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
     px(x - 2, y - 45, 4, 10, actor.ability.color);
     px(x - 9, y - 39, 18, 3, actor.ability.accent);
     ctx.globalAlpha = 1;
-  } else if (actor.ability?.id === "blink" && actor.phase === "repair") {
+  } else if (actor.ability?.id === "warp" && actor.phase === "repair") {
+    const pulse = clamp((time % 1800) / 320, 0, 1);
+    const radius = 10 + Math.floor(pulse * 26);
+    ctx.globalAlpha = 0.18 + (1 - pulse) * 0.2;
+    drawPixelCircle(x - 20, y - 20, radius, actor.ability.color, actor.ability.accent);
+    ctx.globalAlpha = 0.42;
+    drawPixelCircle(x + 13, y - 16, Math.max(7, radius - 8), actor.ability.accent);
     for (let i = 0; i < 4; i += 1) {
-      ctx.globalAlpha = 0.48 - i * 0.08;
-      px(x - 16 - i * 7, y - 22 + i * 3, 5 - (i % 2), 5 - (i % 2), i % 2 ? "#bca982" : "#8a8977");
+      ctx.globalAlpha = 0.52 - i * 0.1;
+      px(x - 26 - i * 9, y - 24 + i * 4, 8 - (i % 2), 7 - (i % 2), i % 2 ? "#bca982" : actor.ability.color);
+      px(x - 23 - i * 9, y - 18 + i * 4, 5, 2, actor.ability.accent);
     }
-    ctx.globalAlpha = 0.8;
-    px(x + 10, y - 28, 7, 2, actor.ability.color);
-    px(x + 14, y - 31, 3, 8, actor.ability.accent);
+    ctx.globalAlpha = 0.9;
+    px(x + 10, y - 31, 10, 3, actor.ability.color);
+    px(x + 15, y - 36, 4, 12, actor.ability.accent);
     ctx.globalAlpha = 1;
   } else if (actor.ability?.id === "greed" && actor.phase === "repair") {
     drawGreedMoneyBag(style, actor, x, y, time);
