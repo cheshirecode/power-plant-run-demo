@@ -17,6 +17,8 @@ const NODE_BONUS_VALUE_MAX = 9;
 const NODE_BONUS_COUNT_MIN = 3;
 const NODE_BONUS_COUNT_MAX = 4;
 const NODE_NEGATIVE_CHANCE = 0.32;
+const NODE_INITIAL_COUNT = 20;
+const NODE_RESPAWN_MS = 3_000;
 const NODE_HOLD_SECONDS_PER_POINT = 0.5;
 const NODE_SIZE_MIN = 7;
 const NODE_SIZE_MAX = 10;
@@ -407,7 +409,8 @@ export class GameRoom {
     if (this.roomState.phase !== "repair") return;
 
     const now = Date.now();
-    for (const node of this.roomState.nodes) {
+    const activeNodes = this.activeNodes();
+    for (const node of activeNodes) {
       if (!node.claimedBy || node.repaired) continue;
       const claimant = this.roomState.players[node.claimedBy];
       if (!claimant || !isInsideNode(claimant, node)) {
@@ -424,9 +427,9 @@ export class GameRoom {
     if (!playerId) return;
     const player = this.roomState.players[playerId];
     if (!player) return;
-    if (this.roomState.nodes.some((node) => node.claimedBy === playerId && !node.repaired)) return;
+    if (activeNodes.some((node) => node.claimedBy === playerId && !node.repaired)) return;
 
-    const node = this.roomState.nodes
+    const node = activeNodes
       .filter((candidate) => !candidate.repaired && !candidate.claimedBy && isInsideNode(player, candidate))
       .sort((a, b) => distanceToNode(player, a) - distanceToNode(player, b))[0];
     if (!node) return;
@@ -499,8 +502,21 @@ export class GameRoom {
       .filter(Boolean);
     const bot = this.roomState.players[BOT_ID];
     const botTick = bot && !bot.spectator ? Date.now() + BOT_TICK_MS : null;
-    const nextTimes = [this.roomState.countdownEndsAt, ...claimEndsAt, botTick].filter(Boolean);
+    const nextSpawn = this.nextNodeSpawnAt();
+    const nextTimes = [this.roomState.countdownEndsAt, ...claimEndsAt, botTick, nextSpawn].filter(Boolean);
     await this.state.storage.setAlarm(Math.min(...nextTimes) + 50);
+  }
+
+  activeNodes(now = Date.now()) {
+    return this.roomState.nodes.filter((node) => isNodeSpawned(node, this.roomState.phaseStartedAt, now));
+  }
+
+  nextNodeSpawnAt(now = Date.now()) {
+    if (this.roomState.phase !== "repair" || !this.roomState.phaseStartedAt) return null;
+    const nextNode = this.roomState.nodes
+      .filter((node) => !isNodeSpawned(node, this.roomState.phaseStartedAt, now))
+      .sort((a, b) => (a.spawnedAt || 0) - (b.spawnedAt || 0))[0];
+    return nextNode ? this.roomState.phaseStartedAt + (nextNode.spawnedAt || 0) : null;
   }
 
   async updateBotPlayer() {
@@ -528,7 +544,8 @@ export class GameRoom {
   getBotTarget(bot) {
     const now = Date.now();
     const remainingMs = Math.max(0, (this.roomState.countdownEndsAt || now) - now);
-    const activeClaim = this.roomState.nodes.find((node) => node.claimedBy === bot.id && !node.repaired);
+    const activeNodes = this.activeNodes(now);
+    const activeClaim = activeNodes.find((node) => node.claimedBy === bot.id && !node.repaired);
     if (activeClaim && remainingMs > BOT_ESCAPE_THRESHOLD_MS) {
       bot.botTargetNodeId = activeClaim.id;
       return activeClaim;
@@ -539,7 +556,7 @@ export class GameRoom {
       return safePlayerSpawns(this.roomState.blast || makeBlast(), 1)[0] || { x: 34, y: 184 };
     }
 
-    const candidates = this.roomState.nodes.filter((node) => !node.repaired && !node.claimedBy);
+    const candidates = activeNodes.filter((node) => !node.repaired && !node.claimedBy);
     if (candidates.length === 0) return safePlayerSpawns(this.roomState.blast || makeBlast(), 1)[0] || null;
 
     const wantsSafety = remainingMs <= BOT_POSITIVE_THRESHOLD_MS;
@@ -751,6 +768,7 @@ function cloneNodes() {
     return {
       ...node,
       repaired: false,
+      spawnedAt: nodeSpawnedAt(index),
       bonus,
       negative: value < 0,
       value,
@@ -759,6 +777,11 @@ function cloneNodes() {
       seed: Math.random() + index,
     };
   });
+}
+
+function nodeSpawnedAt(index) {
+  if (index < NODE_INITIAL_COUNT) return 0;
+  return (index - NODE_INITIAL_COUNT + 1) * NODE_RESPAWN_MS;
 }
 
 function chooseBonusNodeIds() {
@@ -807,6 +830,11 @@ function nodeHoldMs(value) {
   return Math.round(Math.abs(value) * NODE_HOLD_SECONDS_PER_POINT * 1000);
 }
 
+function isNodeSpawned(node, phaseStartedAt, now = Date.now()) {
+  if (!phaseStartedAt) return true;
+  return now >= phaseStartedAt + (node.spawnedAt || 0);
+}
+
 function isInsideNode(player, node) {
   const nodeHalf = Math.ceil((node.size || NODE_SIZE_MIN) / 2);
   const playerLeft = player.x - PLAYER_CLAIM_HALF_WIDTH;
@@ -832,6 +860,9 @@ export const __ROOM_MECHANICS_DEBUG__ = {
   cloneNodes,
   center: BLAST_CENTER,
   redExclusionRadius: NODE_RED_EXCLUSION_RADIUS,
+  initialNodeCount: NODE_INITIAL_COUNT,
+  nodeRespawnMs: NODE_RESPAWN_MS,
+  isNodeSpawned,
   regularNodeValue,
 };
 

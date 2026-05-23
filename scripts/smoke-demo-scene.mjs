@@ -48,6 +48,22 @@ const boostCooldown = debug.getSnapshotAt(1_500, 1_500).players.filter((player) 
 assert(boostBurst.some((player) => player.boostActive), "boost was not active during its 1s burst");
 assert(boostCooldown.every((player) => !player.boostActive), "boost stayed active during cooldown");
 assert(boostCooldown.some((player) => player.skillCooldown > 0 && player.skillCooldown < 1), "boost cooldown bar did not drain");
+assertCooldownTiming(debug, "boost", {
+  activeElapsed: 500,
+  coolingElapsed: 1_500,
+  cooldownElapsed: 3_900,
+  nextActiveElapsed: 4_000,
+  nextCoolingElapsed: 5_100,
+  activePredicate: (player) => player.boostActive,
+});
+assertCooldownTiming(debug, "stasis", {
+  activeElapsed: 0,
+  coolingElapsed: 1_500,
+  cooldownElapsed: 2_900,
+  nextActiveElapsed: 3_000,
+  nextCoolingElapsed: 3_100,
+  activePredicate: (_, sample) => sample.frozenCount > 0,
+});
 const skillStats = repairSamples.at(-1).skillStats;
 assert(skillStats?.stasis?.count > 0, "stasis skill log never recorded frozen players");
 assert(skillStats?.warp?.count > 0, "warp skill log never recorded portal hops");
@@ -57,7 +73,19 @@ const fullDemoNodeSet = debug.getSnapshotAt(10_000, 10_000).nodes;
 assertNodeValueRules(fullDemoNodeSet, 128, "demo full");
 
 for (let i = 0; i < 20; i += 1) {
-  assertNodeValueRules(roomMechanics.cloneNodes(), roomMechanics.redExclusionRadius, `gameplay room ${i + 1}`);
+  const gameplayNodes = roomMechanics.cloneNodes();
+  assertNodeValueRules(gameplayNodes, roomMechanics.redExclusionRadius, `gameplay room ${i + 1}`);
+  assert(
+    gameplayNodes.filter((node) => node.spawnedAt === 0).length === roomMechanics.initialNodeCount,
+    `gameplay room ${i + 1}: initial spawned node count drifted`,
+  );
+  const futureNodes = gameplayNodes.filter((node) => node.spawnedAt > 0);
+  assert(futureNodes.length > 0, `gameplay room ${i + 1}: no timed respawn nodes`);
+  for (const [index, node] of futureNodes.entries()) {
+    assert(node.spawnedAt === (index + 1) * roomMechanics.nodeRespawnMs, `gameplay room ${i + 1}: node ${node.id} has bad spawn timing`);
+    assert(!roomMechanics.isNodeSpawned(node, 1000, 1000 + node.spawnedAt - 1), `gameplay room ${i + 1}: node ${node.id} spawned early`);
+    assert(roomMechanics.isNodeSpawned(node, 1000, 1000 + node.spawnedAt), `gameplay room ${i + 1}: node ${node.id} did not spawn on time`);
+  }
 }
 
 const stages = new Set();
@@ -200,4 +228,20 @@ function assertNodeValueRules(nodes, redExclusionRadius, label) {
       }
     }
   }
+}
+
+function assertCooldownTiming(debug, ability, timings) {
+  const activePlayers = debug.getSnapshotAt(timings.activeElapsed, timings.activeElapsed).players.filter((player) => player.ability === ability);
+  const coolingPlayers = debug.getSnapshotAt(timings.coolingElapsed, timings.coolingElapsed).players.filter((player) => player.ability === ability);
+  const cooldownPlayers = debug.getSnapshotAt(timings.cooldownElapsed, timings.cooldownElapsed).players.filter((player) => player.ability === ability);
+  const nextActiveSample = debug.getSnapshotAt(timings.nextActiveElapsed, timings.nextActiveElapsed);
+  const nextActivePlayers = nextActiveSample.players.filter((player) => player.ability === ability);
+  const nextCoolingPlayers = debug.getSnapshotAt(timings.nextCoolingElapsed, timings.nextCoolingElapsed).players.filter((player) => player.ability === ability);
+  assert(activePlayers.length > 0, `${ability} player missing`);
+  assert(activePlayers.every((player) => player.skillCooldown === 1), `${ability} cooldown was not full at activation`);
+  assert(coolingPlayers.some((player) => player.skillCooldown > 0 && player.skillCooldown < 1), `${ability} cooldown did not drain after activation`);
+  assert(cooldownPlayers.some((player) => player.skillCooldown > 0 && player.skillCooldown < 0.08), `${ability} cooldown did not approach empty before reactivation`);
+  assert(nextActivePlayers.some((player) => player.skillCooldown === 1), `${ability} cooldown did not refill at next activation`);
+  assert(nextCoolingPlayers.some((player) => player.skillCooldown > 0 && player.skillCooldown < 1), `${ability} cooldown did not drain after reactivation`);
+  assert(nextActivePlayers.some((player) => timings.activePredicate(player, nextActiveSample)), `${ability} did not trigger at its next activation timing`);
 }

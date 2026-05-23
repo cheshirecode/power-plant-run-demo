@@ -2773,6 +2773,7 @@ function drawRoomObjectives(style, time, room = sessionState.room) {
       const size = node.repaired ? 6 : node.size || (isRich ? 10 : 8);
       const half = Math.floor(size / 2);
       const spawnAge = room.phaseStartedAt && node.spawnedAt !== undefined ? Date.now() - (room.phaseStartedAt + node.spawnedAt) : 1000;
+      if (spawnAge < 0) continue;
       if (spawnAge >= 0 && spawnAge < 900) {
         ctx.globalAlpha = 0.28 * (1 - spawnAge / 900);
         drawPixelCircle(node.x, node.y, 18 + Math.floor(spawnAge / 90), isNegative ? "#ff6b28" : style.scene.glow);
