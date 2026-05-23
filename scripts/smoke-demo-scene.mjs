@@ -40,7 +40,14 @@ for (let elapsed = 1_000; elapsed < timings.explosionStart; elapsed += 500) {
 assert(repairSamples.some((sample) => sample.claimedNodeCount > 0), "no node was claimed during demo repair");
 assert(repairSamples.some((sample) => sample.repairedNodeCount > 0), "no node was repaired during demo repair");
 assert(repairSamples.some((sample) => Math.abs(sample.nodeTimerDeltaMs) > 0), "demo node repairs never affected the plant timer");
+assert(repairSamples.some((sample) => sample.nodeTimerDeltaMs < 0), "negative nodes never pressured the plant timer");
+assert(repairSamples.every((sample) => sample.players.every((player) => player.roundScore >= 0)), "negative nodes reduced a demo player score");
 assert(repairSamples.some((sample) => sample.frozenCount > 0), "stasis never froze a demo player");
+const boostBurst = debug.getSnapshotAt(500, 500).players.filter((player) => player.ability === "boost");
+const boostCooldown = debug.getSnapshotAt(1_500, 1_500).players.filter((player) => player.ability === "boost");
+assert(boostBurst.some((player) => player.boostActive), "boost was not active during its 1s burst");
+assert(boostCooldown.every((player) => !player.boostActive), "boost stayed active during cooldown");
+assert(boostCooldown.some((player) => player.skillCooldown > 0 && player.skillCooldown < 1), "boost cooldown bar did not drain");
 const skillStats = repairSamples.at(-1).skillStats;
 assert(skillStats?.stasis?.count > 0, "stasis skill log never recorded frozen players");
 assert(skillStats?.warp?.count > 0, "warp skill log never recorded portal hops");

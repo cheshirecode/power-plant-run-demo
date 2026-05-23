@@ -444,8 +444,9 @@ export class GameRoom {
     delete node.claimedBy;
     delete node.claimedAt;
     delete node.claimEndsAt;
-    player.roundScore = roundValue((player.roundScore || 0) + node.value);
-    this.roomState.score = roundValue(this.roomState.score + node.value);
+    const scoreValue = Math.abs(node.value);
+    player.roundScore = roundValue((player.roundScore || 0) + scoreValue);
+    this.roomState.score = roundValue(this.roomState.score + scoreValue);
     this.roomState.countdownEndsAt += Math.round(node.value * 1500);
     if (this.roomState.countdownEndsAt < Date.now()) {
       this.roomState.countdownEndsAt = Date.now();
