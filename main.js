@@ -11,6 +11,7 @@ const logoutButton = document.querySelector("#logout-button");
 const createRoomButton = document.querySelector("#create-room-button");
 const joinRoomButton = document.querySelector("#join-room-button");
 const readyButton = document.querySelector("#ready-button");
+const copyRoomButton = document.querySelector("#copy-room-button");
 const roomCodeInput = document.querySelector("#room-code-input");
 const roomStatus = document.querySelector("#room-status");
 const styleButtons = [...document.querySelectorAll(".style-button")];
@@ -179,6 +180,7 @@ const EXPLOSION_START = 7200;
 const ESCAPE_START = 8350;
 const REBUILD_START = 12850;
 const REBUILD_END = 15800;
+const ESCAPE_ZONE = { x: 18, y: 174, w: 66, h: 34 };
 
 const squad = [
   {
@@ -293,6 +295,7 @@ const sessionState = {
   ready: false,
   room: null,
   nextMoveAt: 0,
+  copiedAt: 0,
 };
 
 ctx.imageSmoothingEnabled = false;
@@ -534,6 +537,11 @@ function setStatus(loop) {
 }
 
 async function loadSession() {
+  const roomFromUrl = getRoomIdFromUrl();
+  if (roomFromUrl) {
+    roomCodeInput.value = roomFromUrl;
+  }
+
   try {
     const response = await fetch("/api/auth/me", { headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error("auth unavailable");
@@ -544,6 +552,9 @@ async function loadSession() {
   }
 
   updateSessionUi();
+  if (sessionState.user && roomFromUrl) {
+    connectRoom(roomFromUrl);
+  }
 }
 
 function updateSessionUi() {
@@ -554,6 +565,7 @@ function updateSessionUi() {
   createRoomButton.disabled = !user;
   joinRoomButton.disabled = !user;
   readyButton.disabled = !user || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
+  copyRoomButton.disabled = !sessionState.roomId;
   roomCodeInput.disabled = !user;
   readyButton.classList.toggle("is-active", sessionState.ready);
   readyButton.setAttribute("aria-pressed", String(sessionState.ready));
@@ -571,7 +583,8 @@ function updateRoomStatus(nextStatus = null) {
   }
 
   const playerCount = sessionState.room ? Object.keys(sessionState.room.players || {}).length : 1;
-  roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/4`;
+  const phase = sessionState.room?.phase || "room";
+  roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/4 · ${phase}`;
 }
 
 async function createRoom() {
@@ -604,6 +617,8 @@ function connectRoom(roomId) {
   disconnectRoom();
   sessionState.roomId = roomId;
   sessionState.ready = false;
+  roomCodeInput.value = roomId;
+  updateRoomUrl(roomId);
   updateRoomStatus("Connecting");
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -649,6 +664,7 @@ function handleRoomMessage(rawMessage) {
 
   if (message.state) {
     sessionState.room = message.state;
+    sessionState.ready = Boolean(message.state.players?.[sessionState.user?.login]?.ready);
     syncDemoToRoomState(message.state);
   }
 
@@ -690,6 +706,69 @@ function toggleReady() {
   sessionState.ready = !sessionState.ready;
   sendRoomMessage({ type: "ready", ready: sessionState.ready });
   updateSessionUi();
+}
+
+async function copyRoomLink() {
+  if (!sessionState.roomId) return;
+
+  const url = buildRoomUrl(sessionState.roomId);
+  try {
+    await navigator.clipboard.writeText(url);
+    sessionState.copiedAt = performance.now();
+    updateRoomStatus("Copied link");
+  } catch {
+    window.prompt("Room link", url);
+  }
+}
+
+function handleCanvasClick(event) {
+  if (!sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN || !sessionState.room) return;
+
+  const point = getCanvasPoint(event);
+  if (sessionState.room.phase === "repair") {
+    const node = getHitRepairNode(point);
+    if (node && !node.repaired) {
+      sendRoomMessage({ type: "node:repair", nodeId: node.id });
+      return;
+    }
+  }
+
+  if (sessionState.room.phase === "escape" && pointInRect(point, ESCAPE_ZONE)) {
+    sendRoomMessage({ type: "player:escape" });
+  }
+}
+
+function getHitRepairNode(point) {
+  const nodes = sessionState.room?.nodes || [];
+  return nodes.find((node) => Math.hypot(point.x - node.x, point.y - node.y) <= 14);
+}
+
+function getCanvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * VIEW.width,
+    y: ((event.clientY - rect.top) / rect.height) * VIEW.height,
+  };
+}
+
+function pointInRect(point, rect) {
+  return point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h;
+}
+
+function getRoomIdFromUrl() {
+  return normalizeRoomId(new URLSearchParams(window.location.search).get("room") || "");
+}
+
+function updateRoomUrl(roomId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", roomId);
+  window.history.replaceState({}, "", url);
+}
+
+function buildRoomUrl(roomId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", roomId);
+  return url.toString();
 }
 
 function normalizeRoomId(value) {
@@ -1418,6 +1497,37 @@ function drawRoomPlayers(style) {
   }
 }
 
+function drawRoomObjectives(style, time) {
+  const room = sessionState.room;
+  if (!room) return;
+
+  if (room.phase === "repair") {
+    for (const node of room.nodes || []) {
+      const pulse = 1 + Math.floor(Math.sin(time / 130 + node.x) * 2);
+      const color = node.repaired ? style.scene.groundLight : style.scene.glow;
+      const edge = node.repaired ? style.scene.groundDark : style.scene.accent;
+      ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
+      drawPixelCircle(node.x, node.y, node.repaired ? 7 : 9 + pulse, color, edge);
+      px(node.x - 2, node.y - 2, 4, 4, node.repaired ? style.scene.groundDark : style.css.text);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  if (room.phase === "escape") {
+    const blink = Math.sin(time / 120) > 0 ? style.scene.glow : style.scene.accent;
+    ctx.globalAlpha = 0.78;
+    px(ESCAPE_ZONE.x, ESCAPE_ZONE.y, ESCAPE_ZONE.w, ESCAPE_ZONE.h, "rgba(0, 0, 0, 0.42)");
+    drawPixelLine(ESCAPE_ZONE.x, ESCAPE_ZONE.y, ESCAPE_ZONE.x + ESCAPE_ZONE.w, ESCAPE_ZONE.y, 2, blink);
+    drawPixelLine(ESCAPE_ZONE.x, ESCAPE_ZONE.y + ESCAPE_ZONE.h, ESCAPE_ZONE.x + ESCAPE_ZONE.w, ESCAPE_ZONE.y + ESCAPE_ZONE.h, 2, blink);
+    drawPixelLine(ESCAPE_ZONE.x, ESCAPE_ZONE.y, ESCAPE_ZONE.x, ESCAPE_ZONE.y + ESCAPE_ZONE.h, 2, blink);
+    drawPixelLine(ESCAPE_ZONE.x + ESCAPE_ZONE.w, ESCAPE_ZONE.y, ESCAPE_ZONE.x + ESCAPE_ZONE.w, ESCAPE_ZONE.y + ESCAPE_ZONE.h, 2, blink);
+    ctx.fillStyle = style.css.text;
+    ctx.font = "6px monospace";
+    ctx.fillText("ESCAPE", ESCAPE_ZONE.x + 13, ESCAPE_ZONE.y + 20);
+    ctx.globalAlpha = 1;
+  }
+}
+
 function getSquadMemberState(member, index, elapsed, time) {
   const escapeStart = ESCAPE_START + index * 140;
 
@@ -1772,6 +1882,7 @@ function render(now) {
   drawBackground(style, now);
   drawPlant(style, now, plantProgress, loop);
   drawExplosion(style, loop.elapsed, now);
+  drawRoomObjectives(style, now);
   drawSquad(style, loop.elapsed, now);
   drawRoomPlayers(style);
   drawVignette(style);
@@ -1786,7 +1897,7 @@ audioButton.addEventListener("click", () => {
 });
 
 loginButton.addEventListener("click", () => {
-  window.location.href = "/api/auth/github/login";
+  window.location.href = `/api/auth/github/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
 });
 
 logoutButton.addEventListener("click", () => {
@@ -1796,6 +1907,8 @@ logoutButton.addEventListener("click", () => {
 createRoomButton.addEventListener("click", createRoom);
 joinRoomButton.addEventListener("click", joinRoom);
 readyButton.addEventListener("click", toggleReady);
+copyRoomButton.addEventListener("click", copyRoomLink);
+canvas.addEventListener("click", handleCanvasClick);
 roomCodeInput.addEventListener("input", () => {
   roomCodeInput.value = normalizeRoomId(roomCodeInput.value);
 });

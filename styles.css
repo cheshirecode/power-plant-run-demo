@@ -355,7 +355,7 @@ h1 {
 
   .room-controls {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   }
 
   .room-controls .session-status {

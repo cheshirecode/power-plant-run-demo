@@ -5,6 +5,7 @@ const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL = "https://api.github.com/user";
 const SESSION_COOKIE = "ppr_session";
 const STATE_COOKIE = "ppr_oauth_state";
+const NEXT_COOKIE = "ppr_oauth_next";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
 const REPAIR_DURATION_MS = 18_000;
 const ESCAPE_DURATION_MS = 7_000;
@@ -328,6 +329,7 @@ function startGithubLogin(request, env) {
 
   const url = new URL(request.url);
   const state = crypto.randomUUID();
+  const nextPath = sanitizeNextPath(url.searchParams.get("next"));
   const callbackUrl = new URL(env.GITHUB_OAUTH_CALLBACK_PATH, url.origin);
   const githubUrl = new URL(GITHUB_AUTHORIZE_URL);
   githubUrl.searchParams.set("client_id", env.GITHUB_CLIENT_ID);
@@ -336,12 +338,20 @@ function startGithubLogin(request, env) {
   githubUrl.searchParams.set("state", state);
 
   return redirect(githubUrl.toString(), {
-    "Set-Cookie": buildCookie(STATE_COOKIE, state, {
-      maxAge: 600,
-      httpOnly: true,
-      sameSite: "Lax",
-      secure: url.protocol === "https:",
-    }),
+    "Set-Cookie": [
+      buildCookie(STATE_COOKIE, state, {
+        maxAge: 600,
+        httpOnly: true,
+        sameSite: "Lax",
+        secure: url.protocol === "https:",
+      }),
+      buildCookie(NEXT_COOKIE, nextPath, {
+        maxAge: 600,
+        httpOnly: true,
+        sameSite: "Lax",
+        secure: url.protocol === "https:",
+      }),
+    ],
   });
 }
 
@@ -354,6 +364,7 @@ async function finishGithubLogin(request, env) {
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const expectedState = getCookie(request, STATE_COOKIE);
+  const nextPath = sanitizeNextPath(getCookie(request, NEXT_COOKIE));
 
   if (!code || !state || state !== expectedState) {
     return json({ error: "Invalid OAuth callback" }, 400);
@@ -405,7 +416,7 @@ async function finishGithubLogin(request, env) {
     env,
   );
 
-  return redirect("/", {
+  return redirect(nextPath, {
     "Set-Cookie": [
       buildCookie(SESSION_COOKIE, sessionValue, {
         maxAge: SESSION_MAX_AGE,
@@ -414,6 +425,7 @@ async function finishGithubLogin(request, env) {
         secure: url.protocol === "https:",
       }),
       expireCookie(STATE_COOKIE, url.protocol === "https:"),
+      expireCookie(NEXT_COOKIE, url.protocol === "https:"),
     ],
   });
 }
@@ -460,6 +472,11 @@ function getCookie(request, name) {
   const cookies = cookieHeader.split(";").map((cookie) => cookie.trim());
   const match = cookies.find((cookie) => cookie.startsWith(`${name}=`));
   return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
+}
+
+function sanitizeNextPath(value) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
+  return value.slice(0, 160);
 }
 
 function buildCookie(name, value, options = {}) {
