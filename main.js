@@ -164,9 +164,11 @@ const plantPalettes = {
   },
 };
 
-const DEMO_DURATION = 12800;
+const LOOP_DURATION = 16600;
 const EXPLOSION_START = 7200;
 const ESCAPE_START = 8350;
+const REBUILD_START = 12850;
+const REBUILD_END = 15800;
 
 const squad = [
   {
@@ -264,6 +266,14 @@ let activeStyle = "steampunk";
 let startedAt = performance.now();
 let lastStatus = "";
 const soldierFrameCache = {};
+const audioState = {
+  context: null,
+  master: null,
+  noiseBuffer: null,
+  unlocked: false,
+  nextStepAt: 0,
+  explosionCycle: -1,
+};
 
 ctx.imageSmoothingEnabled = false;
 
@@ -304,6 +314,120 @@ function setActiveStyle(nextStyle) {
 function replay() {
   startedAt = performance.now();
   lastStatus = "";
+  audioState.nextStepAt = 0;
+  audioState.explosionCycle = -1;
+}
+
+function unlockAudio() {
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+
+  if (!audioState.context) {
+    audioState.context = new AudioContext();
+    audioState.master = audioState.context.createGain();
+    audioState.master.gain.value = 0.32;
+    audioState.master.connect(audioState.context.destination);
+  }
+
+  audioState.context.resume().then(() => {
+    audioState.unlocked = true;
+  });
+}
+
+function getNoiseBuffer() {
+  const audio = audioState.context;
+  if (audioState.noiseBuffer || !audio) return audioState.noiseBuffer;
+
+  const length = Math.floor(audio.sampleRate * 0.58);
+  const buffer = audio.createBuffer(1, length, audio.sampleRate);
+  const data = buffer.getChannelData(0);
+  let held = 0;
+
+  for (let i = 0; i < length; i += 1) {
+    if (i % 84 === 0) {
+      held = Math.round((Math.random() * 2 - 1) * 7) / 7;
+    }
+    data[i] = held * (1 - i / length);
+  }
+
+  audioState.noiseBuffer = buffer;
+  return buffer;
+}
+
+function playSquareTone(frequency, start, duration, volume) {
+  const audio = audioState.context;
+  if (!audio || !audioState.master) return;
+
+  const oscillator = audio.createOscillator();
+  const gain = audio.createGain();
+  oscillator.type = "square";
+  oscillator.frequency.setValueAtTime(frequency, start);
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.linearRampToValueAtTime(volume, start + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+  oscillator.connect(gain);
+  gain.connect(audioState.master);
+  oscillator.start(start);
+  oscillator.stop(start + duration + 0.02);
+}
+
+function playFootstepSound(count, phase) {
+  const audio = audioState.context;
+  if (!audio || !audioState.unlocked) return;
+
+  const base = phase === "escape" ? 118 : 84;
+  const stagger = count > 2 ? 7 : 0;
+  const frequency = base + (count % 3) * 18 + stagger;
+  playSquareTone(frequency, audio.currentTime, 0.035, 0.055);
+  playSquareTone(frequency * 0.5, audio.currentTime + 0.018, 0.025, 0.035);
+}
+
+function playExplosionSound() {
+  const audio = audioState.context;
+  if (!audio || !audioState.master || !audioState.unlocked) return;
+
+  const start = audio.currentTime;
+  const noise = audio.createBufferSource();
+  const gain = audio.createGain();
+  const filter = audio.createBiquadFilter();
+  noise.buffer = getNoiseBuffer();
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(1800, start);
+  filter.frequency.exponentialRampToValueAtTime(120, start + 0.54);
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.linearRampToValueAtTime(0.95, start + 0.018);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.56);
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioState.master);
+  noise.start(start);
+  noise.stop(start + 0.58);
+
+  playSquareTone(180, start, 0.18, 0.22);
+  playSquareTone(92, start + 0.06, 0.28, 0.18);
+  playSquareTone(46, start + 0.18, 0.32, 0.14);
+
+  for (let i = 0; i < 12; i += 1) {
+    playSquareTone(220 + hash2d(i, 4, activeStyle.length) * 620, start + 0.05 + i * 0.032, 0.028, 0.045);
+  }
+}
+
+function updateDemoAudio(style, loop, time) {
+  if (!audioState.unlocked || !audioState.context) return;
+
+  const actors = squad.map((member, index) => getSquadMemberState(member, index, loop.elapsed, time)).filter(Boolean);
+  const movingActors = actors.filter((actor) => (actor.phase === "enter" && actor.fade > 0.16) || actor.phase === "escape");
+
+  if (movingActors.length > 0 && time >= audioState.nextStepAt) {
+    const escaping = movingActors.some((actor) => actor.phase === "escape");
+    playFootstepSound(movingActors.length, escaping ? "escape" : "enter");
+    audioState.nextStepAt = time + (escaping ? 108 : 145) - Math.min(32, movingActors.length * 6);
+  }
+
+  if (audioState.explosionCycle !== loop.cycle && loop.elapsed >= EXPLOSION_START && loop.elapsed < EXPLOSION_START + 900) {
+    playExplosionSound(style);
+    audioState.explosionCycle = loop.cycle;
+  }
 }
 
 function clamp(value, min, max) {
@@ -316,6 +440,20 @@ function easeInOut(value) {
 
 function lerp(a, b, amount) {
   return a + (b - a) * amount;
+}
+
+function getLoopState(totalElapsed) {
+  const cycle = Math.floor(totalElapsed / LOOP_DURATION);
+  const elapsed = totalElapsed % LOOP_DURATION;
+  const rebuildProgress = clamp((elapsed - REBUILD_START) / (REBUILD_END - REBUILD_START), 0, 1);
+  const upgradeLevel = Math.min(3, cycle + rebuildProgress);
+
+  return {
+    cycle,
+    elapsed,
+    upgradeLevel,
+    rebuildProgress,
+  };
 }
 
 function getPointOnPath(points, progress) {
@@ -336,12 +474,13 @@ function hash2d(x, y, seed = 0) {
   return value - Math.floor(value);
 }
 
-function setStatus(elapsed) {
-  let next = "Squad approaching";
+function setStatus(loop) {
+  const { elapsed, cycle } = loop;
+  let next = cycle > 0 ? "Squad returning" : "Squad approaching";
   if (elapsed > 5100) next = "Entering the plant";
   if (elapsed >= EXPLOSION_START) next = "Plant detonation";
   if (elapsed >= ESCAPE_START) next = "Squad escaping";
-  if (elapsed >= DEMO_DURATION) next = "Everyone clear";
+  if (elapsed >= REBUILD_START) next = "Plant rebuilding";
 
   if (next !== lastStatus) {
     statusText.textContent = next;
@@ -587,8 +726,8 @@ function drawPixelCircle(cx, cy, radius, fill, edge) {
   }
 }
 
-function drawPlant(style, time, progress, elapsed) {
-  drawNativePlant(style, time, progress, elapsed);
+function drawPlant(style, time, progress, loop) {
+  drawNativePlant(style, time, progress, loop);
 }
 
 function drawSceneEntrance(style, progress, time) {
@@ -617,21 +756,42 @@ function drawGroundContact(colors) {
   ctx.globalAlpha = 1;
 }
 
-function drawNativePlant(style, time, progress, elapsed = 0) {
+function drawNativePlant(style, time, progress, loop = getLoopState(0)) {
   const colors = style.scene;
   const palette = plantPalettes[activeStyle];
-  const damage = clamp((elapsed - EXPLOSION_START) / 1550, 0, 1);
+  const elapsed = loop.elapsed;
+  const damage = elapsed < REBUILD_START ? clamp((elapsed - EXPLOSION_START) / 1550, 0, 1) : 0;
+
+  if (elapsed >= REBUILD_START && elapsed < REBUILD_END) {
+    drawDestroyedPlant(style, palette, elapsed, time);
+    ctx.globalAlpha = 0.18 + loop.rebuildProgress * 0.82;
+    drawIntactPlantBody(style, palette, progress, time, loop.upgradeLevel);
+    ctx.globalAlpha = 1;
+    drawRebuildPixels(style, palette, loop.rebuildProgress, time);
+    return;
+  }
 
   if (damage >= 0.82) {
     drawDestroyedPlant(style, palette, elapsed, time);
     return;
   }
 
+  drawIntactPlantBody(style, palette, progress, time, loop.upgradeLevel, damage);
+}
+
+function drawIntactPlantBody(style, palette, progress, time, upgradeLevel, damage = 0) {
+  const colors = style.scene;
+  const scale = 1 + Math.min(3, upgradeLevel) * 0.045;
+
   ctx.save();
+  ctx.translate(244, 112);
+  ctx.scale(scale, scale);
+  ctx.translate(-244, -112);
   if (damage > 0) {
     const shake = Math.ceil((1 - damage) * 5);
     ctx.translate((hash2d(Math.floor(time / 42), 1, activeStyle.length) - 0.5) * shake, (hash2d(2, Math.floor(time / 42), activeStyle.length) - 0.5) * shake);
   }
+
   drawPlantShadow(colors);
   drawPlantPad(colors, palette);
   drawPlantBackPipes(palette);
@@ -639,12 +799,64 @@ function drawNativePlant(style, time, progress, elapsed = 0) {
   drawCorePedestal(palette);
   drawCoreOrb(palette, time);
   drawPlantFrontDetails(palette, time);
+  drawUpgradeArmor(palette, upgradeLevel, time);
   drawEntrance(style, palette, progress, time);
 
   if (damage > 0) {
     drawPlantDamageScars(style, palette, damage, time);
   }
   ctx.restore();
+}
+
+function drawUpgradeArmor(palette, upgradeLevel, time) {
+  if (upgradeLevel <= 0.08) return;
+
+  const tier = Math.ceil(upgradeLevel);
+  px(158, 101, 176, 5, palette.trimDark);
+  px(166, 96, 158, 4, palette.trim);
+  px(184, 55, 26, 5, palette.trim);
+  px(286, 54, 45, 5, palette.trim);
+
+  if (tier >= 2) {
+    px(149, 126, 190, 5, palette.bodyDark);
+    px(161, 131, 168, 4, palette.trim);
+    drawPipe(
+      [
+        { x: 165, y: 92 },
+        { x: 198, y: 102 },
+        { x: 228, y: 96 },
+      ],
+      4,
+      palette.pipe,
+      palette.pipeDark,
+    );
+  }
+
+  if (tier >= 3) {
+    const blink = Math.sin(time / 140) > 0 ? palette.coreBright : palette.core;
+    px(151, 83, 16, 43, palette.bodyDark);
+    px(154, 78, 10, 46, palette.body);
+    px(155, 86, 6, 28, blink);
+    px(337, 81, 16, 43, palette.bodyDark);
+    px(340, 76, 10, 46, palette.body);
+    px(341, 84, 6, 28, blink);
+  }
+}
+
+function drawRebuildPixels(style, palette, progress, time) {
+  const colors = [palette.body, palette.trim, palette.pipe, palette.coreBright, style.scene.glow];
+
+  for (let i = 0; i < 34; i += 1) {
+    const lift = (1 - progress) * (34 + hash2d(i, 44, activeStyle.length) * 38);
+    const x = 166 + hash2d(i, 51, activeStyle.length) * 170;
+    const y = 133 - lift + Math.sin(time / 170 + i) * 4;
+    const size = 2 + Math.floor(hash2d(i, 57, activeStyle.length) * 4);
+
+    ctx.globalAlpha = 0.32 + progress * 0.5;
+    px(x, y, size, size, colors[i % colors.length]);
+  }
+
+  ctx.globalAlpha = 1;
 }
 
 function drawPlantShadow(colors) {
@@ -1321,14 +1533,15 @@ function drawVignette(style) {
 function render(now) {
   const style = styles[activeStyle];
   const elapsed = now - startedAt;
-  const plantProgress = clamp(elapsed / 7200, 0, 1);
-  const cappedElapsed = Math.min(elapsed, DEMO_DURATION);
+  const loop = getLoopState(elapsed);
+  const plantProgress = clamp(loop.elapsed / 7200, 0, 1);
 
-  setStatus(cappedElapsed);
+  updateDemoAudio(style, loop, now);
+  setStatus(loop);
   drawBackground(style, now);
-  drawPlant(style, now, plantProgress, cappedElapsed);
-  drawExplosion(style, cappedElapsed, now);
-  drawSquad(style, cappedElapsed, now);
+  drawPlant(style, now, plantProgress, loop);
+  drawExplosion(style, loop.elapsed, now);
+  drawSquad(style, loop.elapsed, now);
   drawVignette(style);
 
   requestAnimationFrame(render);
@@ -1336,13 +1549,19 @@ function render(now) {
 
 for (const button of styleButtons) {
   button.addEventListener("click", () => {
+    unlockAudio();
     setActiveStyle(button.dataset.style);
   });
 }
 
-replayButton.addEventListener("click", replay);
+replayButton.addEventListener("click", () => {
+  unlockAudio();
+  replay();
+});
 
 window.addEventListener("keydown", (event) => {
+  unlockAudio();
+
   if (event.key === "r" || event.key === "R" || event.key === " ") {
     replay();
   }
