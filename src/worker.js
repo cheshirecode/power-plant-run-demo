@@ -603,6 +603,7 @@ export class GameRoom {
       .filter((player) => !player.spectator)
       .map((player) => ({
         id: player.id,
+        ability: player.ability || null,
         score: roundValue(player.score),
         roundScore: roundValue(player.roundScore || 0),
         caughtInBlast: Boolean(player.caughtInBlast),

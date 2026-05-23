@@ -255,10 +255,10 @@ const demoNodes = [
 ].map(normalizeDemoNode);
 const demoAbilities = [
   { id: "boost", label: "BOOST", name: "Overclock Boots", hint: "3x burst", color: "#70a8ff", accent: "#f1e8cf" },
-  { id: "magnet", label: "MAG", name: "Magnet Gloves", hint: "claims nearby", color: "#57d56c", accent: "#d7ffd8" },
+  { id: "magnet", label: "MAG", name: "Magnet Gloves", hint: "claim farther", color: "#57d56c", accent: "#d7ffd8" },
   { id: "stasis", label: "STASIS", name: "Stasis Popper", hint: "freezes rivals", color: "#9fdfff", accent: "#f1e8cf" },
   { id: "warp", label: "WARP", name: "Portal Boots", hint: "short hops", color: "#d5983b", accent: "#f1e8cf" },
-  { id: "greed", label: "GREED", name: "Greedy Wrench", hint: "snaps rich nodes", color: "#ff6b28", accent: "#ffe28f" },
+  { id: "greed", label: "GREED", name: "Greedy Wrench", hint: "fast rich nodes", color: "#ff6b28", accent: "#ffe28f" },
 ];
 const DEMO_ONLY_ABILITY_IDS = new Set(demoAbilities.map((ability) => ability.id));
 
@@ -1255,8 +1255,10 @@ function demoActorCanClaimNode(actor, node) {
 function getDemoSummary(loop) {
   return squad.map((member, index) => {
     const outcome = getDemoPlayerOutcome(member, index, loop);
+    const ability = getDemoAbility(member, loop.cycle);
     return {
       id: member.id,
+      ability,
       roundScore: outcome.roundScore,
       score: outcome.roundScore,
       state: outcome.state,
@@ -2763,14 +2765,15 @@ function drawRoomObjectives(style, time, room = sessionState.room) {
 
   if (room.phase === "repair") {
     for (const node of room.nodes || []) {
+      if (node.repaired) continue;
       const isNegative = node.value < 0;
       const magnitude = Math.abs(node.value);
       const isRich = magnitude >= 7 || node.bonus;
       const isClaimed = Boolean(node.claimedBy);
       const pulse = Math.floor(Math.sin(time / (isRich ? 96 : 130) + node.x) * 1);
-      const color = node.repaired ? style.scene.groundLight : isNegative ? "#ff4f36" : "#57d56c";
-      const edge = node.repaired ? style.scene.groundDark : isClaimed ? style.css.text : isNegative ? "#5b1711" : "#153119";
-      const size = node.repaired ? 6 : node.size || (isRich ? 10 : 8);
+      const color = isNegative ? "#ff4f36" : "#57d56c";
+      const edge = isClaimed ? style.css.text : isNegative ? "#5b1711" : "#153119";
+      const size = node.size || (isRich ? 10 : 8);
       const half = Math.floor(size / 2);
       const spawnAge = room.phaseStartedAt && node.spawnedAt !== undefined ? Date.now() - (room.phaseStartedAt + node.spawnedAt) : 1000;
       if (spawnAge < 0) continue;
@@ -2790,11 +2793,11 @@ function drawRoomObjectives(style, time, room = sessionState.room) {
         drawClaimOwnerLock(style, room, node, time, isNegative);
       }
       drawNodeSmoke(style, node, time, isNegative, isRich);
-      ctx.globalAlpha = node.repaired ? 0.55 : 0.92;
+      ctx.globalAlpha = 0.92;
       px(node.x - half - 1, node.y - half - 1, size + 2, size + 2, edge);
       px(node.x - half, node.y - half, size, size, color);
-      px(node.x - half + 2, node.y - half + 2, Math.max(2, size - 4), Math.max(2, size - 4), node.repaired ? style.scene.groundDark : isNegative ? "#3a1512" : "#153119");
-      px(node.x - 1 + pulse, node.y - 1, 2, 2, node.repaired ? style.scene.groundLight : style.css.text);
+      px(node.x - half + 2, node.y - half + 2, Math.max(2, size - 4), Math.max(2, size - 4), isNegative ? "#3a1512" : "#153119");
+      px(node.x - 1 + pulse, node.y - 1, 2, 2, style.css.text);
       if (node.bonus && !node.repaired) {
         px(node.x - 1, node.y - half - 5, 2, 3, style.css.text);
         px(node.x - 1, node.y + half + 2, 2, 3, style.css.text);
@@ -3001,9 +3004,13 @@ function drawRoundSummary(style, summary, options = {}) {
     const row = visibleRows[i];
     const state = row.state === "incapacitated" ? "DOWN" : "OK";
     const roundPrefix = row.roundScore > 0 ? "+" : "";
+    const textX = row.ability ? panelX + 24 : panelX + 12;
+    if (row.ability) {
+      drawAbilityIcon(row.ability, panelX + 12, panelY + 26 + i * 12, 7);
+    }
     ctx.fillText(
       `${row.id.slice(0, 8)} ${roundPrefix}${formatScore(row.roundScore)} / ${formatScore(row.score)} ${state}`,
-      panelX + 12,
+      textX,
       panelY + 34 + i * 12,
     );
   }
@@ -3542,6 +3549,7 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
     repairedNodeCount: room.repairedNodeCount,
     claimedNodeCount: nodes.filter((node) => node.claimedBy).length,
     nodeCount: nodes.length,
+    summary: room.summary || [],
     nodes: nodes.map((node) => ({
       id: node.id,
       x: node.x,
