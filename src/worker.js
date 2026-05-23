@@ -605,6 +605,7 @@ export class GameRoom {
         id: player.id,
         ability: player.ability || null,
         score: roundValue(player.score),
+        previousScore: roundValue((player.score || 0) - (player.roundScore || 0)),
         roundScore: roundValue(player.roundScore || 0),
         caughtInBlast: Boolean(player.caughtInBlast),
         state: player.state || PLAYER_STATE_ALIVE,

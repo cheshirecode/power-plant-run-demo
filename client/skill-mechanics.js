@@ -20,17 +20,23 @@ export const SKILL_CONFIG = {
   },
   magnet: {
     claimRadius: 72,
+    captureMultiplier: 0.36,
+    scoreMultiplier: 1.35,
   },
   stasis: {
-    cooldownMs: 3000,
-    pulseMs: 260,
-    freezeMs: 1000,
-    radius: 138,
+    cooldownMs: 2600,
+    pulseMs: 300,
+    freezeMs: 1150,
+    radius: 160,
+    captureMultiplier: 0.42,
+    scoreMultiplier: 1.35,
   },
   warp: {
-    cooldownMs: 1800,
-    activeMs: 320,
-    teleportRange: 116,
+    cooldownMs: 1700,
+    activeMs: 360,
+    teleportRange: 130,
+    captureMultiplier: 0.54,
+    scoreMultiplier: 1.08,
   },
   greed: {
     highValueMin: 7,
@@ -66,6 +72,11 @@ export function getSkillCooldownRatio(skillId, elapsed, config = SKILL_CONFIG) {
     if (phase < config.boost.activeMs) return 1;
     return 1 - (phase - config.boost.activeMs) / config.boost.cooldownMs;
   }
+  if (skillId === SKILL_IDS.warp) {
+    const phase = elapsed % config.warp.cooldownMs;
+    if (phase < config.warp.activeMs) return 1;
+    return 1 - (phase - config.warp.activeMs) / (config.warp.cooldownMs - config.warp.activeMs);
+  }
   return null;
 }
 
@@ -76,7 +87,13 @@ export function getCaptureDurationMs(node, skillId, config = SKILL_CONFIG) {
     return Math.max(1150, Math.round(baseHoldMs * multiplier));
   }
   if (skillId === SKILL_IDS.magnet) {
-    return Math.max(1150, Math.round(baseHoldMs * 0.62));
+    return Math.max(1150, Math.round(baseHoldMs * config.magnet.captureMultiplier));
+  }
+  if (skillId === SKILL_IDS.stasis) {
+    return Math.max(1150, Math.round(baseHoldMs * config.stasis.captureMultiplier));
+  }
+  if (skillId === SKILL_IDS.warp) {
+    return Math.max(1150, Math.round(baseHoldMs * config.warp.captureMultiplier));
   }
   return Math.max(1150, Math.round(baseHoldMs * 0.68));
 }
@@ -85,6 +102,12 @@ export function getNodeScoreValue(node, skillId, config = SKILL_CONFIG) {
   let multiplier = 1;
   if (skillId === SKILL_IDS.greed) {
     multiplier = isHighValueNode(node, config) ? config.greed.highValueScoreMultiplier : config.greed.lowValueScoreMultiplier;
+  } else if (skillId === SKILL_IDS.magnet) {
+    multiplier = config.magnet.scoreMultiplier;
+  } else if (skillId === SKILL_IDS.stasis) {
+    multiplier = config.stasis.scoreMultiplier;
+  } else if (skillId === SKILL_IDS.warp) {
+    multiplier = config.warp.scoreMultiplier;
   }
   return Math.abs(node?.value || 0) * multiplier;
 }

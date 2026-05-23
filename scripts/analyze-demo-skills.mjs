@@ -21,21 +21,23 @@ for (let cycle = 0; cycle < runCount; cycle += 1) {
       runs: 0,
       totalScore: 0,
       totalStoredScore: 0,
+      totalRoundScore: 0,
       downs: 0,
       wins: 0,
     };
     stat.runs += 1;
     stat.totalScore += row.score || 0;
     stat.totalStoredScore += row.lost ? row.score + row.lost : row.score || 0;
+    stat.totalRoundScore += row.roundScore || 0;
     if (row.state === "incapacitated") stat.downs += 1;
     totals.set(ability, stat);
   }
 
-  const winner = [...(snapshot.summary || [])].sort((a, b) => (b.score || 0) - (a.score || 0))[0];
+  const winner = [...(snapshot.summary || [])].sort((a, b) => (b.roundScore || 0) - (a.roundScore || 0))[0];
   if (winner?.ability?.id && totals.has(winner.ability.id)) {
     totals.get(winner.ability.id).wins += 1;
   }
-  samples.push({ cycle, winner: winner?.ability?.id || "none", score: winner?.score || 0 });
+  samples.push({ cycle, winner: winner?.ability?.id || "none", score: winner?.roundScore || 0 });
 }
 
 const ranked = [...totals.values()]
@@ -43,17 +45,18 @@ const ranked = [...totals.values()]
     ...stat,
     avgScore: stat.totalScore / stat.runs,
     avgPreBlastScore: stat.totalStoredScore / stat.runs,
+    avgRoundScore: stat.totalRoundScore / stat.runs,
     downRate: stat.downs / stat.runs,
   }))
-  .sort((a, b) => b.avgScore - a.avgScore);
+  .sort((a, b) => b.avgRoundScore - a.avgRoundScore);
 
 console.log(`# Demo skill analysis (${runCount} cycles)`);
 console.log("");
-console.log("| skill | avg final | avg pre-blast | downs | wins |");
-console.log("| --- | ---: | ---: | ---: | ---: |");
+console.log("| skill | avg total | avg round | avg pre-blast | downs | wins |");
+console.log("| --- | ---: | ---: | ---: | ---: | ---: |");
 for (const stat of ranked) {
   console.log(
-    `| ${stat.ability} | ${stat.avgScore.toFixed(2)} | ${stat.avgPreBlastScore.toFixed(2)} | ${(stat.downRate * 100).toFixed(0)}% | ${stat.wins} |`,
+    `| ${stat.ability} | ${stat.avgScore.toFixed(2)} | ${stat.avgRoundScore.toFixed(2)} | ${stat.avgPreBlastScore.toFixed(2)} | ${(stat.downRate * 100).toFixed(0)}% | ${stat.wins} |`,
   );
 }
 console.log("");

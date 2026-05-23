@@ -1,4 +1,5 @@
 import { countdownLabel, countdownMs, countdownSeconds, formatHoldLabel, formatNodeValue, formatScore } from "./client/formatters.js";
+import { buildLeaderboardRows } from "./client/leaderboard.js";
 import { buildRoomUrl, clearRoomUrl, getRoomIdFromUrl, normalizeRoomId, updateRoomUrl } from "./client/room-url.js";
 import {
   PLAYER_STATES,
@@ -220,7 +221,7 @@ const DEMO_NODE_SPAWN_MS = 3000;
 const DEMO_INITIAL_NODE_COUNT = 40;
 const DEMO_NODE_SPAWN_PER_PLAYER_MULTIPLIER = 1.5;
 const DEMO_RUNNER_SPEED = 2.15;
-const DEMO_ESCAPE_THRESHOLD_MS = 4800;
+const DEMO_ESCAPE_THRESHOLD_MS = 2600;
 const DEMO_NODE_TIMER_FACTOR_MS = 900;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
@@ -340,6 +341,7 @@ const demoVisibleNodeCache = new Map();
 const demoNodePlanCache = new Map();
 const demoDetonationCache = new Map();
 const demoEscapeStartCache = new Map();
+const demoPreviousScoreCache = new Map();
 const audioState = {
   context: null,
   master: null,
@@ -651,8 +653,8 @@ function updateDemoAudio(style, loop, time) {
     if (!abilityId || actor.phase !== "repair") continue;
     if (abilityId === "boost" && actor.boostActive) {
       cueDemoAbilitySound(`${loop.cycle}:boost:${actor.member.id}:${Math.floor(repairElapsed / getBoostIntervalMs())}`, abilityId);
-    } else if (abilityId === "warp" && actor.warpHopActive && repairElapsed % 1800 < 180) {
-      cueDemoAbilitySound(`${loop.cycle}:warp:${actor.member.id}:${Math.floor(repairElapsed / 1800)}`, abilityId);
+    } else if (abilityId === "warp" && actor.warpHopActive && repairElapsed % SKILL_CONFIG.warp.cooldownMs < 180) {
+      cueDemoAbilitySound(`${loop.cycle}:warp:${actor.member.id}:${Math.floor(repairElapsed / SKILL_CONFIG.warp.cooldownMs)}`, abilityId);
     } else if (abilityId === "stasis" && actor.stasisPulse) {
       cueDemoAbilitySound(`${loop.cycle}:stasis:${actor.member.id}:${Math.floor(repairElapsed / SKILL_CONFIG.stasis.cooldownMs)}`, abilityId);
     } else if ((abilityId === "greed" || abilityId === "magnet") && actor.activeNode) {
@@ -887,7 +889,16 @@ function getDemoNodeCandidates(member, index, cycle) {
     return [...visibleNodes].filter((node) => node.value > 0).sort(byPositive);
   }
   if (ability.id === "magnet") {
-    return [...visibleNodes].sort((a, b) => Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y));
+    return [...visibleNodes].sort((a, b) => {
+      const magnetScore = (node) =>
+        Math.abs(node.value) * 50 +
+        getDemoVisibleNodes(cycle, EXPLOSION_START).filter((other) => Math.hypot(other.x - node.x, other.y - node.y) <= SKILL_CONFIG.magnet.claimRadius).length * 35 -
+        Math.hypot(node.x - spawn.x, node.y - spawn.y);
+      return magnetScore(b) - magnetScore(a);
+    });
+  }
+  if (ability.id === "warp") {
+    return [...visibleNodes].sort(byRiches);
   }
 
   const start = Math.floor(hash2d(index + 3, cycle + 7, member.id.length) * visibleNodes.length);
@@ -1069,6 +1080,24 @@ function getDemoPlayerOutcome(member, index, loop) {
   };
 }
 
+function getDemoPreviousScore(member, index, cycle) {
+  if (cycle <= 0) return 0;
+  const cacheKey = `${member.id}:${cycle}`;
+  if (demoPreviousScoreCache.has(cacheKey)) return demoPreviousScoreCache.get(cacheKey);
+
+  let total = 0;
+  for (let priorCycle = 0; priorCycle < cycle; priorCycle += 1) {
+    const outcome = getDemoPlayerOutcome(member, index, {
+      cycle: priorCycle,
+      elapsed: EXPLOSION_START + 1,
+    });
+    total += outcome.roundScore || 0;
+  }
+  const previousScore = Number(total.toFixed(2));
+  demoPreviousScoreCache.set(cacheKey, previousScore);
+  return previousScore;
+}
+
 function getDemoActorState(member, index, loop, time) {
   const ability = getDemoAbility(member, loop.cycle);
   const repairElapsed = getDemoRepairElapsed(loop);
@@ -1148,7 +1177,7 @@ function getDemoActorState(member, index, loop, time) {
 
 function applyDemoWarpHop(member, index, cycle, elapsed, position) {
   const phaseElapsed = elapsed % SKILL_CONFIG.warp.cooldownMs;
-  if (phaseElapsed >= SKILL_CONFIG.warp.activeMs || position.phase !== "move") return { position, active: false };
+  if (phaseElapsed >= SKILL_CONFIG.warp.activeMs) return { position, active: false };
 
   const targetNode = findBestWarpNode(position, getDemoVisibleNodes(cycle, elapsed));
   if (!targetNode) return { position, active: false };
@@ -1202,6 +1231,7 @@ function getDemoRoom(loop, time) {
       ability: actor.ability,
       state: actor.phase === PLAYER_STATES.stasis ? PLAYER_STATES.stasis : outcome.state,
       boostActive: Boolean(actor.boostActive),
+      warpHopActive: Boolean(actor.warpHopActive),
       skillCooldown: actor.skillCooldown,
       ready: true,
       score: outcome.roundScore,
@@ -1265,11 +1295,13 @@ function getDemoSummary(loop) {
   return squad.map((member, index) => {
     const outcome = getDemoPlayerOutcome(member, index, loop);
     const ability = getDemoAbility(member, loop.cycle);
+    const previousScore = getDemoPreviousScore(member, index, loop.cycle);
     return {
       id: member.id,
       ability,
       roundScore: outcome.roundScore,
-      score: outcome.roundScore,
+      previousScore,
+      score: Number((previousScore + outcome.roundScore).toFixed(2)),
       state: outcome.state,
       lost: outcome.caught ? outcome.storedRoundScore : 0,
     };
@@ -2921,7 +2953,7 @@ function drawDemoHud(style, room, loop) {
   const skillsX = 8;
   const skillsWidth = 188;
   const runnersX = 204;
-  const runnersWidth = 220;
+  const runnersWidth = 318;
   const panelHeight = 104;
   px(skillsX, panelY, skillsWidth, panelHeight, "rgba(0, 0, 0, 0.68)");
   px(skillsX, panelY, skillsWidth, 3, style.scene.accent);
@@ -2944,19 +2976,34 @@ function drawDemoHud(style, room, loop) {
     ctx.fillText(ability.hint, skillsX + 70, y);
   }
 
+  const leaderboardRows = buildLeaderboardRows(
+    squad.map((member, index) => {
+      const ability = getDemoAbility(member, loop.cycle);
+      const previousScore = getDemoPreviousScore(member, index, loop.cycle);
+      const roundScore = getDemoRoundScore(member, index, loop);
+      return {
+        id: member.id,
+        ability,
+        previousScore,
+        roundScore,
+        score: previousScore + roundScore,
+      };
+    }),
+  );
+
   ctx.fillStyle = style.css.muted;
-  ctx.fillText("[SKILL] PLAYER         SCORE", runnersX + 10, panelY + 28);
-  for (let i = 0; i < squad.length; i += 1) {
-    const member = squad[i];
-    const ability = getDemoAbility(member, loop.cycle);
+  ctx.fillText("[SKILL] PLAYER       TOTAL     PREV+ROUND", runnersX + 10, panelY + 28);
+  for (let i = 0; i < leaderboardRows.length; i += 1) {
+    const row = leaderboardRows[i];
     const y = panelY + 41 + i * 8;
-    const score = getDemoRoundScore(member, i, loop);
-    const scoreLabel = `${score >= 0 ? "+" : ""}${formatScore(score)}`;
-    drawAbilityIcon(ability, runnersX + 11, y - 7, 7);
+    const roundPrefix = row.roundScore >= 0 ? "+" : "";
+    drawAbilityIcon(row.ability, runnersX + 11, y - 7, 7);
     ctx.fillStyle = style.css.text;
-    ctx.fillText(member.id.slice(0, 8).toUpperCase().padEnd(8, " "), runnersX + 24, y);
-    ctx.fillStyle = score >= 0 ? "#dff7b8" : "#ffb6a6";
-    ctx.fillText(scoreLabel.padStart(8, " "), runnersX + 90, y);
+    ctx.fillText(row.id.slice(0, 8).toUpperCase().padEnd(8, " "), runnersX + 24, y);
+    ctx.fillStyle = row.roundScore >= 0 ? "#dff7b8" : "#ffb6a6";
+    ctx.fillText(formatScore(row.score).padStart(7, " "), runnersX + 88, y);
+    ctx.fillStyle = style.css.muted;
+    ctx.fillText(`${formatScore(row.previousScore)}+${roundPrefix}${formatScore(row.roundScore)}`, runnersX + 136, y);
   }
 }
 
@@ -2985,7 +3032,7 @@ function drawDemoBlastReport(style, room, loop) {
   drawRoundSummary(style, summary, {
     x: 520,
     y: 22,
-    width: 202,
+    width: 238,
     title: "DEMO BLAST REPORT",
   });
 
@@ -2999,28 +3046,36 @@ function drawDemoBlastReport(style, room, loop) {
 function drawRoundSummary(style, summary, options = {}) {
   const panelX = options.x ?? 118;
   const panelY = options.y ?? 54;
-  const panelWidth = options.width ?? 150;
+  const panelWidth = options.width ?? 238;
   const title = options.title ?? "ROUND SUMMARY";
-  const visibleRows = summary.slice(0, 8);
-  const panelHeight = Math.max(62, 34 + visibleRows.length * 12);
+  const visibleRows = buildLeaderboardRows(summary).slice(0, 8);
+  const panelHeight = Math.max(70, 42 + visibleRows.length * 12);
   px(panelX, panelY, panelWidth, panelHeight, "rgba(0, 0, 0, 0.72)");
   px(panelX, panelY, panelWidth, 3, style.scene.accent);
   ctx.fillStyle = style.css.text;
   ctx.font = "8px monospace";
   ctx.fillText(title, panelX + 18, panelY + 18);
+  ctx.font = "6px monospace";
+  ctx.fillStyle = style.css.muted;
+  ctx.fillText("PLAYER       TOTAL    PREV + ROUND", panelX + 12, panelY + 31);
   ctx.font = "7px monospace";
   for (let i = 0; i < visibleRows.length; i += 1) {
     const row = visibleRows[i];
     const state = row.state === "incapacitated" ? "DOWN" : "OK";
-    const roundPrefix = row.roundScore > 0 ? "+" : "";
+    const roundPrefix = row.roundScore >= 0 ? "+" : "";
     const textX = row.ability ? panelX + 24 : panelX + 12;
     if (row.ability) {
-      drawAbilityIcon(row.ability, panelX + 12, panelY + 26 + i * 12, 7);
+      drawAbilityIcon(row.ability, panelX + 12, panelY + 34 + i * 12, 7);
     }
+    ctx.fillStyle = style.css.text;
+    ctx.fillText(row.id.slice(0, 8).padEnd(8, " "), textX, panelY + 42 + i * 12);
+    ctx.fillStyle = "#dff7b8";
+    ctx.fillText(formatScore(row.score).padStart(6, " "), panelX + panelWidth - 104, panelY + 42 + i * 12);
+    ctx.fillStyle = style.css.muted;
     ctx.fillText(
-      `${row.id.slice(0, 8)} ${roundPrefix}${formatScore(row.roundScore)} / ${formatScore(row.score)} ${state}`,
-      textX,
-      panelY + 34 + i * 12,
+      `${formatScore(row.previousScore)}+${roundPrefix}${formatScore(row.roundScore)} ${state}`,
+      panelX + panelWidth - 66,
+      panelY + 42 + i * 12,
     );
   }
 }
@@ -3193,7 +3248,7 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
     px(x - 9, y - 39, 18, 3, actor.ability.accent);
     ctx.globalAlpha = 1;
   } else if (actor.ability?.id === "warp" && actor.phase === "repair") {
-    const pulse = clamp((time % 1800) / 320, 0, 1);
+    const pulse = clamp((time % SKILL_CONFIG.warp.cooldownMs) / SKILL_CONFIG.warp.activeMs, 0, 1);
     const radius = 10 + Math.floor(pulse * 26);
     ctx.globalAlpha = 0.18 + (1 - pulse) * 0.2;
     drawPixelCircle(x - 20, y - 20, radius, actor.ability.color, actor.ability.accent);
@@ -3573,6 +3628,7 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
       id: player.id,
       ability: player.ability?.id,
       boostActive: Boolean(player.boostActive),
+      warpHopActive: Boolean(player.warpHopActive),
       skillCooldown: player.skillCooldown,
       state: player.state,
       roundScore: player.roundScore,

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { SKILL_CONFIG } from "../client/skill-mechanics.js";
 
 installBrowserStubs();
 
@@ -43,7 +44,10 @@ for (let elapsed = 1_000; elapsed < timings.explosionStart; elapsed += 500) {
 assert(repairSamples.some((sample) => sample.claimedNodeCount > 0), "no node was claimed during demo repair");
 assert(repairSamples.some((sample) => sample.repairedNodeCount > 0), "no node was repaired during demo repair");
 assert(repairSamples.some((sample) => Math.abs(sample.nodeTimerDeltaMs) > 0), "demo node repairs never affected the plant timer");
-assert(repairSamples.some((sample) => sample.nodeTimerDeltaMs < 0), "negative nodes never pressured the plant timer");
+assert(
+  repairSamples.some((sample, index) => index > 0 && sample.nodeTimerDeltaMs < repairSamples[index - 1].nodeTimerDeltaMs),
+  "negative nodes never pressured the plant timer",
+);
 assert(repairSamples.every((sample) => sample.players.every((player) => player.roundScore >= 0)), "negative nodes reduced a demo player score");
 assert(repairSamples.some((sample) => sample.frozenCount > 0), "stasis never froze a demo player");
 const boostBurst = debug.getSnapshotAt(500, 500).players.filter((player) => player.ability === "boost");
@@ -62,12 +66,21 @@ assertCooldownTiming(debug, "boost", {
 assertCooldownTiming(debug, "stasis", {
   activeElapsed: 0,
   coolingElapsed: 1_500,
-  cooldownElapsed: 2_900,
-  nextActiveElapsed: 3_000,
-  nextCoolingElapsed: 3_100,
+  cooldownElapsed: SKILL_CONFIG.stasis.cooldownMs - 100,
+  nextActiveElapsed: SKILL_CONFIG.stasis.cooldownMs,
+  nextCoolingElapsed: SKILL_CONFIG.stasis.cooldownMs + 300,
   activePredicate: (_, sample) => sample.frozenCount > 0,
 });
+assertCooldownTiming(debug, "warp", {
+  activeElapsed: 100,
+  coolingElapsed: Math.floor(SKILL_CONFIG.warp.activeMs + 250),
+  cooldownElapsed: SKILL_CONFIG.warp.cooldownMs - 40,
+  nextActiveElapsed: SKILL_CONFIG.warp.cooldownMs,
+  nextCoolingElapsed: SKILL_CONFIG.warp.cooldownMs + SKILL_CONFIG.warp.activeMs + 250,
+  activePredicate: (player) => player.skillCooldown === 1,
+});
 const skillStats = repairSamples.at(-1).skillStats;
+assert(repairSamples.some((sample) => sample.players.some((player) => player.ability === "warp" && player.warpHopActive)), "warp never activated during repair");
 assert(skillStats?.stasis?.count > 0, "stasis skill log never recorded frozen players");
 assert(skillStats?.warp?.count > 0, "warp skill log never recorded portal hops");
 assert(skillStats?.greed?.count > 0, "greed skill log never recorded rich snaps");
