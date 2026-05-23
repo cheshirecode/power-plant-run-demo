@@ -14,6 +14,9 @@ const readyButton = document.querySelector("#ready-button");
 const copyRoomButton = document.querySelector("#copy-room-button");
 const roomCodeInput = document.querySelector("#room-code-input");
 const roomStatus = document.querySelector("#room-status");
+const roomSheet = document.querySelector("#room-sheet");
+const roomSheetStatus = document.querySelector("#room-sheet-status");
+const roomReadyButton = document.querySelector("#room-ready-button");
 const styleButtons = [...document.querySelectorAll(".style-button")];
 
 const VIEW = {
@@ -296,6 +299,7 @@ const sessionState = {
   room: null,
   nextMoveAt: 0,
   copiedAt: 0,
+  briefingDismissedFor: "",
 };
 
 ctx.imageSmoothingEnabled = false;
@@ -569,6 +573,10 @@ function updateSessionUi() {
   roomCodeInput.disabled = !user;
   readyButton.classList.toggle("is-active", sessionState.ready);
   readyButton.setAttribute("aria-pressed", String(sessionState.ready));
+  readyButton.textContent = sessionState.ready ? "Ready" : "Ready";
+  roomReadyButton.disabled = readyButton.disabled;
+  roomReadyButton.textContent = sessionState.ready ? "Ready" : "Ready";
+  updateRoomSheet();
 }
 
 function updateRoomStatus(nextStatus = null) {
@@ -585,6 +593,23 @@ function updateRoomStatus(nextStatus = null) {
   const playerCount = sessionState.room ? Object.keys(sessionState.room.players || {}).length : 1;
   const phase = sessionState.room?.phase || "room";
   roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/4 · ${phase}`;
+}
+
+function updateRoomSheet() {
+  const shouldShow = Boolean(
+    sessionState.user &&
+      sessionState.roomId &&
+      sessionState.socket?.readyState === WebSocket.OPEN &&
+      sessionState.room?.phase === "lobby" &&
+      !sessionState.ready &&
+      sessionState.briefingDismissedFor !== sessionState.roomId,
+  );
+
+  roomSheet.classList.toggle("is-hidden", !shouldShow);
+  if (!shouldShow) return;
+
+  const playerCount = Object.keys(sessionState.room?.players || {}).length;
+  roomSheetStatus.textContent = `${sessionState.roomId} · ${playerCount}/4 joined`;
 }
 
 async function createRoom() {
@@ -617,6 +642,7 @@ function connectRoom(roomId) {
   disconnectRoom();
   sessionState.roomId = roomId;
   sessionState.ready = false;
+  sessionState.briefingDismissedFor = "";
   roomCodeInput.value = roomId;
   updateRoomUrl(roomId);
   updateRoomStatus("Connecting");
@@ -629,6 +655,7 @@ function connectRoom(roomId) {
   socket.addEventListener("open", () => {
     updateRoomStatus();
     updateSessionUi();
+    updateRoomSheet();
   });
 
   socket.addEventListener("message", (event) => {
@@ -640,6 +667,7 @@ function connectRoom(roomId) {
     sessionState.ready = false;
     updateRoomStatus(sessionState.roomId ? "Disconnected" : "Solo");
     updateSessionUi();
+    updateRoomSheet();
   });
 
   socket.addEventListener("error", () => {
@@ -670,6 +698,7 @@ function handleRoomMessage(rawMessage) {
 
   updateRoomStatus();
   updateSessionUi();
+  updateRoomSheet();
 }
 
 function syncDemoToRoomState(room) {
@@ -703,7 +732,11 @@ function updateRoomPosition(loop, time) {
 }
 
 function toggleReady() {
-  sessionState.ready = !sessionState.ready;
+  const nextReady = !sessionState.ready;
+  if (nextReady && sessionState.roomId) {
+    sessionState.briefingDismissedFor = sessionState.roomId;
+  }
+  sessionState.ready = nextReady;
   sendRoomMessage({ type: "ready", ready: sessionState.ready });
   updateSessionUi();
 }
@@ -1907,6 +1940,7 @@ logoutButton.addEventListener("click", () => {
 createRoomButton.addEventListener("click", createRoom);
 joinRoomButton.addEventListener("click", joinRoom);
 readyButton.addEventListener("click", toggleReady);
+roomReadyButton.addEventListener("click", toggleReady);
 copyRoomButton.addEventListener("click", copyRoomLink);
 canvas.addEventListener("click", handleCanvasClick);
 roomCodeInput.addEventListener("input", () => {

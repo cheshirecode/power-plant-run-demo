@@ -253,7 +253,8 @@ h1 {
     inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
-.start-gate {
+.start-gate,
+.room-sheet {
   position: absolute;
   inset: clamp(10px, 2vw, 22px);
   z-index: 2;
@@ -273,7 +274,12 @@ h1 {
   display: none;
 }
 
-.start-panel {
+.room-sheet {
+  z-index: 3;
+}
+
+.start-panel,
+.room-sheet-panel {
   display: grid;
   gap: 16px;
   justify-items: center;
@@ -285,11 +291,34 @@ h1 {
     inset 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.start-panel h2 {
+.room-sheet-panel {
+  width: min(360px, calc(100% - 28px));
+  justify-items: stretch;
+}
+
+.start-panel h2,
+.room-sheet-panel h2 {
   margin: 0;
   font-size: clamp(1.35rem, 1.05rem + 1vw, 2rem);
   line-height: 1;
   letter-spacing: 0;
+}
+
+.room-sheet-panel p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.room-sheet-panel ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .start-button {
