@@ -27,6 +27,7 @@ export class GameRoom {
       phase: "lobby",
       cycle: 0,
       upgradeLevel: 0,
+      targetPlayerCount: 2,
       startedAt: null,
       phaseStartedAt: null,
       players: {},
@@ -46,6 +47,11 @@ export class GameRoom {
     }
 
     const url = new URL(request.url);
+    const targetPlayerCount = clampNumber(url.searchParams.get("players"), 1, MAX_PLAYERS);
+    if (this.roomState.phase === "lobby" && Object.keys(this.roomState.players).length === 0) {
+      this.roomState.targetPlayerCount = targetPlayerCount;
+    }
+
     const playerId = sanitizePlayerId(url.searchParams.get("player"));
     if (!playerId) {
       return json({ error: "Missing or invalid player id" }, 400);
@@ -145,6 +151,7 @@ export class GameRoom {
   async maybeStartRun() {
     const players = Object.values(this.roomState.players);
     if (this.roomState.phase !== "lobby" || players.length === 0) return;
+    if (players.length < this.roomState.targetPlayerCount) return;
     if (!players.every((player) => player.ready)) return;
 
     this.roomState.cycle += 1;
@@ -294,9 +301,17 @@ export default {
     }
 
     if (url.pathname === "/api/rooms" && request.method === "POST") {
+      let targetPlayerCount = 2;
+      try {
+        const payload = await request.json();
+        targetPlayerCount = clampNumber(payload.playerCount, 1, MAX_PLAYERS);
+      } catch {
+        targetPlayerCount = 2;
+      }
       const roomId = crypto.randomUUID().slice(0, 8);
       return json({
         roomId,
+        targetPlayerCount,
         websocketPath: `/ws/rooms/${roomId}`,
       });
     }

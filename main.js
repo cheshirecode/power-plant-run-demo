@@ -12,6 +12,7 @@ const createRoomButton = document.querySelector("#create-room-button");
 const joinRoomButton = document.querySelector("#join-room-button");
 const readyButton = document.querySelector("#ready-button");
 const copyRoomButton = document.querySelector("#copy-room-button");
+const roomSizeInput = document.querySelector("#room-size-input");
 const roomCodeInput = document.querySelector("#room-code-input");
 const roomStatus = document.querySelector("#room-status");
 const roomSheet = document.querySelector("#room-sheet");
@@ -300,6 +301,8 @@ const sessionState = {
   nextMoveAt: 0,
   copiedAt: 0,
   briefingDismissedFor: "",
+  target: null,
+  localPosition: null,
 };
 
 ctx.imageSmoothingEnabled = false;
@@ -571,6 +574,7 @@ function updateSessionUi() {
   joinRoomButton.disabled = !user;
   readyButton.disabled = !user || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
   copyRoomButton.disabled = !sessionState.roomId;
+  roomSizeInput.disabled = !user || Boolean(sessionState.roomId);
   roomCodeInput.disabled = !user;
   readyButton.classList.toggle("is-active", sessionState.ready);
   readyButton.setAttribute("aria-pressed", String(sessionState.ready));
@@ -593,8 +597,9 @@ function updateRoomStatus(nextStatus = null) {
   }
 
   const playerCount = sessionState.room ? Object.keys(sessionState.room.players || {}).length : 1;
+  const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
   const phase = sessionState.room?.phase || "room";
-  roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/4 · ${phase}`;
+  roomStatus.textContent = `${sessionState.roomId} · ${playerCount}/${targetCount} · ${phase}`;
 }
 
 function updateRoomSheet() {
@@ -611,7 +616,8 @@ function updateRoomSheet() {
   if (!shouldShow) return;
 
   const playerCount = Object.keys(sessionState.room?.players || {}).length;
-  roomSheetStatus.textContent = `${sessionState.roomId} · ${playerCount}/4 joined`;
+  const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
+  roomSheetStatus.textContent = `${sessionState.roomId} · ${playerCount}/${targetCount} joined`;
 }
 
 async function createRoom() {
@@ -619,7 +625,11 @@ async function createRoom() {
   updateRoomStatus("Creating");
 
   try {
-    const response = await fetch("/api/rooms", { method: "POST", headers: { Accept: "application/json" } });
+    const response = await fetch("/api/rooms", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ playerCount: getSelectedRoomSize() }),
+    });
     if (!response.ok) throw new Error("room create failed");
     const room = await response.json();
     roomCodeInput.value = room.roomId;
@@ -645,13 +655,16 @@ function connectRoom(roomId) {
   sessionState.roomId = roomId;
   sessionState.ready = false;
   sessionState.briefingDismissedFor = "";
+  sessionState.localPosition = null;
+  sessionState.target = null;
   roomCodeInput.value = roomId;
   updateRoomUrl(roomId);
   updateRoomStatus("Connecting");
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const playerId = encodeURIComponent(sessionState.user.login);
-  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/rooms/${roomId}?player=${playerId}`);
+  const targetPlayerCount = getSelectedRoomSize();
+  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/rooms/${roomId}?player=${playerId}&players=${targetPlayerCount}`);
   sessionState.socket = socket;
 
   socket.addEventListener("open", () => {
@@ -722,15 +735,28 @@ function updateRoomPosition(loop, time) {
   const player = sessionState.room.players?.[sessionState.user.login];
   if (!player) return;
 
-  const memberIndex = squad.findIndex((member) => member.role === player.role);
-  const member = squad[Math.max(0, memberIndex)];
-  const position = getSquadMemberState(member, Math.max(0, memberIndex), loop.elapsed, time) || getPointOnPath(member.enterPath, 0);
+  if (!sessionState.localPosition) {
+    sessionState.localPosition = { x: player.x || 42, y: player.y || 178 };
+  }
+  if (!sessionState.target) {
+    sessionState.target = { ...sessionState.localPosition };
+  }
+
+  const dx = sessionState.target.x - sessionState.localPosition.x;
+  const dy = sessionState.target.y - sessionState.localPosition.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance > 0.5) {
+    const step = Math.min(distance, 2.6);
+    sessionState.localPosition.x += (dx / distance) * step;
+    sessionState.localPosition.y += (dy / distance) * step;
+  }
+
   sendRoomMessage({
     type: "player:move",
-    x: Math.round(position.x),
-    y: Math.round(position.y),
+    x: Math.round(sessionState.localPosition.x),
+    y: Math.round(sessionState.localPosition.y),
   });
-  sessionState.nextMoveAt = time + 180;
+  sessionState.nextMoveAt = time + 90;
 }
 
 function toggleReady() {
@@ -760,6 +786,7 @@ function handleCanvasClick(event) {
   if (!sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN || !sessionState.room) return;
 
   const point = getCanvasPoint(event);
+  setControlTarget(point);
   if (sessionState.room.phase === "repair") {
     const node = getHitRepairNode(point);
     if (node && !node.repaired) {
@@ -771,6 +798,18 @@ function handleCanvasClick(event) {
   if (sessionState.room.phase === "escape" && pointInRect(point, ESCAPE_ZONE)) {
     sendRoomMessage({ type: "player:escape" });
   }
+}
+
+function handleCanvasPointerMove(event) {
+  if (!sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN || !sessionState.room) return;
+  setControlTarget(getCanvasPoint(event));
+}
+
+function setControlTarget(point) {
+  sessionState.target = {
+    x: clamp(point.x, 8, VIEW.width - 8),
+    y: clamp(point.y, 22, VIEW.height - 8),
+  };
 }
 
 function getHitRepairNode(point) {
@@ -804,6 +843,10 @@ function buildRoomUrl(roomId) {
   const url = new URL(window.location.href);
   url.searchParams.set("room", roomId);
   return url.toString();
+}
+
+function getSelectedRoomSize() {
+  return Math.round(clamp(Number(roomSizeInput.value) || 2, 1, 4));
 }
 
 function normalizeRoomId(value) {
@@ -1515,21 +1558,36 @@ function drawSquad(style, elapsed, time) {
 function drawRoomPlayers(style) {
   if (!sessionState.room?.players || !sessionState.user) return;
 
-  const players = Object.values(sessionState.room.players).filter((player) => player.id !== sessionState.user.login);
+  const players = Object.values(sessionState.room.players).sort((a, b) => (a.y || 0) - (b.y || 0));
   for (const player of players) {
+    const isLocal = player.id === sessionState.user.login;
     const x = Math.round(player.x || 0);
     const y = Math.round(player.y || 0);
     if (x <= 0 || y <= 0) continue;
 
     px(x - 5, y - 14, 10, 10, style.scene.shadow);
-    px(x - 3, y - 18, 6, 6, style.scene.glow);
-    px(x - 2, y - 17, 4, 4, style.scene.accent);
-    px(x - 5, y - 7, 10, 3, style.scene.soldier.armor);
+    px(x - 3, y - 18, 6, 6, isLocal ? style.css.text : style.scene.glow);
+    px(x - 2, y - 17, 4, 4, isLocal ? style.scene.glow : style.scene.accent);
+    px(x - 5, y - 7, 10, 3, isLocal ? style.scene.accent : style.scene.soldier.armor);
     px(x - 8, y - 23, Math.min(34, player.id.length * 4 + 4), 5, "rgba(0, 0, 0, 0.62)");
     ctx.fillStyle = style.css.text;
     ctx.font = "5px monospace";
     ctx.fillText(player.id.slice(0, 8), x - 6, y - 19);
+
+    if (isLocal) {
+      drawPlayerArrow(style, x, y, player.ready);
+    }
   }
+}
+
+function drawPlayerArrow(style, x, y, ready) {
+  const bob = Math.floor(Math.sin(performance.now() / 140) * 2);
+  const arrowY = y - 34 + bob;
+  const color = ready ? style.scene.glow : style.scene.accent;
+  px(x - 2, arrowY, 4, 7, color);
+  px(x - 5, arrowY + 5, 10, 3, color);
+  px(x - 3, arrowY + 8, 6, 3, color);
+  px(x - 1, arrowY + 11, 2, 3, color);
 }
 
 function drawRoomObjectives(style, time) {
@@ -1911,6 +1969,9 @@ function render(now) {
 
   if (gameStarted) {
     updateDemoAudio(style, loop, now);
+  }
+
+  if (sessionState.room) {
     updateRoomPosition(loop, now);
   }
   setStatus(loop);
@@ -1918,8 +1979,11 @@ function render(now) {
   drawPlant(style, now, plantProgress, loop);
   drawExplosion(style, loop.elapsed, now);
   drawRoomObjectives(style, now);
-  drawSquad(style, loop.elapsed, now);
-  drawRoomPlayers(style);
+  if (sessionState.room) {
+    drawRoomPlayers(style);
+  } else {
+    drawSquad(style, loop.elapsed, now);
+  }
   drawVignette(style);
 
   requestAnimationFrame(render);
@@ -1945,6 +2009,7 @@ readyButton.addEventListener("click", toggleReady);
 roomReadyButton.addEventListener("click", toggleReady);
 copyRoomButton.addEventListener("click", copyRoomLink);
 canvas.addEventListener("click", handleCanvasClick);
+canvas.addEventListener("pointermove", handleCanvasPointerMove);
 roomCodeInput.addEventListener("input", () => {
   roomCodeInput.value = normalizeRoomId(roomCodeInput.value);
 });

@@ -180,7 +180,8 @@ h1 {
   display: none !important;
 }
 
-.room-input {
+.room-input,
+.room-select {
   width: 72px;
   min-height: 34px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, #000);
@@ -193,7 +194,13 @@ h1 {
   text-transform: lowercase;
 }
 
-.room-input:focus {
+.room-select {
+  width: 58px;
+  appearance: none;
+}
+
+.room-input:focus,
+.room-select:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -388,7 +395,7 @@ h1 {
 
   .room-controls {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
   }
 
   .room-controls .session-status {

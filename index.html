@@ -23,6 +23,12 @@
 
           <div class="room-controls" aria-label="Room controls">
             <button class="control-button" type="button" id="create-room-button">Create</button>
+            <select class="room-select" id="room-size-input" aria-label="Room player count">
+              <option value="1">1P</option>
+              <option value="2" selected>2P</option>
+              <option value="3">3P</option>
+              <option value="4">4P</option>
+            </select>
             <input class="room-input" id="room-code-input" type="text" maxlength="40" autocomplete="off" aria-label="Room code" />
             <button class="control-button" type="button" id="join-room-button">Join</button>
             <button class="control-button" type="button" id="ready-button" aria-pressed="false">Ready</button>
@@ -69,9 +75,9 @@
               <p id="room-sheet-status">Waiting for squad</p>
             </div>
             <ol>
-              <li>Copy the room link and wait for up to four players.</li>
+              <li>Copy the room link and wait for the selected squad size.</li>
               <li>Click Ready when everyone is in.</li>
-              <li>Repair every glowing node on the plant.</li>
+              <li>Move with the mouse and repair every glowing node.</li>
               <li>Run to the Escape zone before detonation.</li>
             </ol>
             <button class="start-button" type="button" id="room-ready-button">Ready</button>
