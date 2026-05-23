@@ -47,7 +47,7 @@ button {
 }
 
 .topbar {
-  width: min(1180px, 100%);
+  width: min(1600px, 100%);
   min-width: 0;
   margin: 0 auto;
   display: flex;
@@ -57,7 +57,7 @@ button {
 }
 
 .topbar > div:first-child {
-  flex: 0 0 190px;
+  flex: 0 0 auto;
 }
 
 h1 {
@@ -80,7 +80,7 @@ h1 {
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
-  max-width: 960px;
+  max-width: none;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
@@ -111,7 +111,7 @@ h1 {
 }
 
 .session-status {
-  max-width: 108px;
+  max-width: 96px;
   overflow: hidden;
   color: var(--muted);
   font-size: 0.72rem;
@@ -120,11 +120,15 @@ h1 {
   white-space: nowrap;
 }
 
+#room-status {
+  max-width: 88px;
+}
+
 .room-field {
   position: relative;
   display: block;
-  width: 150px;
-  min-width: 130px;
+  width: 126px;
+  min-width: 112px;
 }
 
 .room-field span {
@@ -140,18 +144,19 @@ h1 {
 }
 
 .style-switcher {
-  display: flex;
   min-width: 0;
   min-height: 34px;
   flex: 0 0 auto;
   padding: 0;
-  gap: 4px;
 }
 
 .control-button,
 .style-button,
 .replay-button,
 .action-menu summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   min-height: 34px;
   border: 1px solid transparent;
   color: var(--text);
@@ -228,6 +233,10 @@ h1 {
   text-align: left;
 }
 
+.style-menu-panel {
+  width: 126px;
+}
+
 .control-button:disabled,
 .room-input:disabled,
 .bot-toggle:has(input:disabled),
@@ -237,12 +246,119 @@ h1 {
 }
 
 .style-button {
-  display: inline-flex;
-  align-items: center;
+  width: 100%;
+  justify-content: flex-start;
   gap: 6px;
   padding: 0 9px;
+  border-color: color-mix(in srgb, var(--border) 70%, #000);
+  background: color-mix(in srgb, var(--panel-strong) 62%, #000);
   font-size: 0.74rem;
   line-height: 1;
+}
+
+.button-icon {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  image-rendering: pixelated;
+}
+
+.button-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-github {
+  border-radius: 50%;
+  background:
+    linear-gradient(transparent 0 9px, var(--panel-bg) 9px 11px, transparent 11px),
+    radial-gradient(circle at 7px 6px, var(--text) 0 6px, transparent 7px);
+}
+
+.icon-logout {
+  background:
+    linear-gradient(90deg, var(--muted) 0 6px, transparent 6px),
+    linear-gradient(transparent 0 3px, var(--accent) 3px 6px, transparent 6px 8px, var(--accent) 8px 11px, transparent 11px);
+}
+
+.icon-plus {
+  background:
+    linear-gradient(90deg, transparent 0 5px, var(--accent) 5px 9px, transparent 9px),
+    linear-gradient(transparent 0 5px, var(--accent) 5px 9px, transparent 9px);
+}
+
+.icon-replay {
+  border: 2px solid var(--accent-2);
+  border-left-color: transparent;
+  border-radius: 50%;
+}
+
+.icon-replay::after {
+  position: absolute;
+  top: -3px;
+  left: 1px;
+  width: 5px;
+  height: 5px;
+  border-top: 3px solid var(--accent-2);
+  border-left: 3px solid var(--accent-2);
+  content: "";
+}
+
+.icon-rooms {
+  background:
+    linear-gradient(90deg, var(--accent) 0 6px, transparent 6px 8px, var(--accent-2) 8px 14px),
+    linear-gradient(transparent 0 2px, var(--panel-bg) 2px 4px, transparent 4px 8px, var(--panel-bg) 8px 10px, transparent 10px);
+}
+
+.icon-session {
+  background:
+    linear-gradient(transparent 0 2px, var(--muted) 2px 4px, transparent 4px 6px, var(--muted) 6px 8px, transparent 8px 10px, var(--muted) 10px 12px, transparent 12px);
+}
+
+.icon-ready {
+  background:
+    linear-gradient(135deg, transparent 0 42%, var(--accent-2) 42% 56%, transparent 56%),
+    linear-gradient(45deg, transparent 0 48%, var(--accent-2) 48% 62%, transparent 62%);
+}
+
+.icon-end {
+  background:
+    linear-gradient(45deg, transparent 0 42%, #ff6b28 42% 58%, transparent 58%),
+    linear-gradient(135deg, transparent 0 42%, #ff6b28 42% 58%, transparent 58%);
+}
+
+.icon-leave {
+  background:
+    linear-gradient(90deg, var(--muted) 0 5px, transparent 5px),
+    linear-gradient(45deg, transparent 0 42%, var(--accent) 42% 58%, transparent 58%);
+}
+
+.icon-copy {
+  background:
+    linear-gradient(90deg, transparent 0 3px, var(--accent-2) 3px 10px, transparent 10px),
+    linear-gradient(transparent 0 3px, var(--accent-2) 3px 10px, transparent 10px),
+    linear-gradient(90deg, var(--muted) 0 7px, transparent 7px),
+    linear-gradient(var(--muted) 0 7px, transparent 7px);
+}
+
+.icon-sound {
+  background:
+    linear-gradient(90deg, var(--accent) 0 5px, transparent 5px),
+    linear-gradient(45deg, transparent 0 42%, var(--accent) 42% 58%, transparent 58%);
+}
+
+.icon-sound::after {
+  position: absolute;
+  top: 3px;
+  right: 0;
+  width: 5px;
+  height: 8px;
+  border-right: 2px solid var(--accent-2);
+  border-radius: 50%;
+  content: "";
 }
 
 .control-button:hover,
@@ -277,7 +393,7 @@ h1 {
 
 .room-input,
 .room-select {
-  width: 108px;
+  width: 96px;
   min-height: 34px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, #000);
   background: color-mix(in srgb, var(--panel-strong) 78%, #000);
@@ -322,7 +438,7 @@ h1 {
 }
 
 .room-select {
-  width: 92px;
+  width: 86px;
   appearance: none;
 }
 
@@ -363,14 +479,13 @@ h1 {
   padding: 0 10px;
   border-color: var(--border);
   background: color-mix(in srgb, var(--panel-bg) 88%, #000);
-  box-shadow: 0 12px 28px var(--shadow);
   font-size: 0.74rem;
   line-height: 1;
 }
 
 .stage-wrap {
   position: relative;
-  width: min(1180px, 100%);
+  width: min(1600px, 100%);
   min-width: 0;
   min-height: 0;
   margin: 0 auto;

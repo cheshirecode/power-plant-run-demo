@@ -7,8 +7,8 @@ const SESSION_COOKIE = "ppr_session";
 const STATE_COOKIE = "ppr_oauth_state";
 const NEXT_COOKIE = "ppr_oauth_next";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
-const ROUND_COUNTDOWN_MS = 10_000;
-const EXPLOSION_DURATION_MS = 2_200;
+const ROUND_COUNTDOWN_MS = 15_000;
+const EXPLOSION_DURATION_MS = 3_300;
 const NODE_VALUE_MIN = 1.5;
 const NODE_VALUE_MAX = 6;
 const NODE_BONUS_VALUE_MIN = 7;
@@ -16,7 +16,7 @@ const NODE_BONUS_VALUE_MAX = 9;
 const NODE_BONUS_COUNT_MIN = 3;
 const NODE_BONUS_COUNT_MAX = 4;
 const NODE_NEGATIVE_CHANCE = 0.32;
-const NODE_HOLD_SECONDS_PER_POINT = 1 / 3;
+const NODE_HOLD_SECONDS_PER_POINT = 0.5;
 const NODE_REPAIR_RADIUS_MIN = 6;
 const NODE_REPAIR_RADIUS_MAX = 9;
 const NODE_MIN_DISTANCE = 36;
@@ -30,10 +30,12 @@ const BLAST_RADIUS_BASE = 46;
 const BLAST_RADIUS_JITTER = 5;
 const MAX_PLAYERS = 4;
 const BOT_ID = "bot-1";
-const BOT_TICK_MS = 350;
-const BOT_SPEED = 36;
-const BOT_ESCAPE_THRESHOLD_MS = 2_500;
-const BOT_POSITIVE_THRESHOLD_MS = 5_000;
+const BOT_TICK_MS = 90;
+const BOT_STEP = 5.2;
+const BOT_ESCAPE_THRESHOLD_MS = 3_750;
+const BOT_POSITIVE_THRESHOLD_MS = 7_500;
+const PLAYER_STATE_ALIVE = "alive";
+const PLAYER_STATE_INCAPACITATED = "incapacitated";
 const START_NODES = [
   { id: "n1", x: 70, y: 348 },
   { id: "n2", x: 96, y: 172 },
@@ -98,6 +100,7 @@ export class GameRoom {
       replayVotes: {},
       closed: false,
       botEnabled: false,
+      roundBanked: false,
     };
   }
 
@@ -198,6 +201,7 @@ export class GameRoom {
       y: 178,
       score: 0,
       roundScore: 0,
+      state: PLAYER_STATE_ALIVE,
       ready: false,
       spectator: isSpectator,
     };
@@ -331,6 +335,7 @@ export class GameRoom {
     this.roomState.blast = makeBlast();
     this.roomState.replayVotes = {};
     this.roomState.closed = false;
+    this.roomState.roundBanked = false;
     this.roomState.countdownEndsAt = Date.now() + ROUND_COUNTDOWN_MS;
     const spawns = safePlayerSpawns(this.roomState.blast, players.length);
     for (const player of players) {
@@ -342,6 +347,7 @@ export class GameRoom {
       player.y = spawn.y;
       player.roundScore = 0;
       player.caughtInBlast = false;
+      player.state = PLAYER_STATE_ALIVE;
       player.ready = Boolean(player.bot);
       delete player.botTargetNodeId;
     }
@@ -400,10 +406,9 @@ export class GameRoom {
     delete node.claimedBy;
     delete node.claimedAt;
     delete node.claimEndsAt;
-    player.score = roundValue((player.score || 0) + node.value);
     player.roundScore = roundValue((player.roundScore || 0) + node.value);
     this.roomState.score = roundValue(this.roomState.score + node.value);
-    this.roomState.countdownEndsAt += Math.round(node.value * 1000);
+    this.roomState.countdownEndsAt += Math.round(node.value * 1500);
     if (this.roomState.countdownEndsAt < Date.now()) {
       this.roomState.countdownEndsAt = Date.now();
     }
@@ -472,7 +477,7 @@ export class GameRoom {
     const dy = target.y - bot.y;
     const distance = Math.hypot(dx, dy);
     if (distance > 0.5) {
-      const step = Math.min(distance, BOT_SPEED);
+      const step = Math.min(distance, BOT_STEP);
       bot.x = Math.round(bot.x + (dx / distance) * step);
       bot.y = Math.round(bot.y + (dy / distance) * step);
     }
@@ -521,13 +526,23 @@ export class GameRoom {
       const caught = Math.hypot(player.x - blast.x, player.y - blast.y) <= blast.radius;
       player.caughtInBlast = caught;
       if (caught) {
-        player.score = 0;
         player.roundScore = 0;
+        player.state = PLAYER_STATE_INCAPACITATED;
+      } else if (!player.spectator) {
+        player.state = PLAYER_STATE_ALIVE;
       }
     }
   }
 
   createSummary() {
+    if (!this.roomState.roundBanked) {
+      for (const player of Object.values(this.roomState.players)) {
+        if (player.spectator) continue;
+        player.score = roundValue((player.score || 0) + (player.roundScore || 0));
+      }
+      this.roomState.roundBanked = true;
+    }
+
     this.roomState.summary = Object.values(this.roomState.players)
       .filter((player) => !player.spectator)
       .map((player) => ({
@@ -535,6 +550,7 @@ export class GameRoom {
         score: roundValue(player.score),
         roundScore: roundValue(player.roundScore || 0),
         caughtInBlast: Boolean(player.caughtInBlast),
+        state: player.state || PLAYER_STATE_ALIVE,
       }))
       .sort((a, b) => b.score - a.score);
   }
@@ -586,6 +602,7 @@ export class GameRoom {
       y: 184,
       score: 0,
       roundScore: 0,
+      state: PLAYER_STATE_ALIVE,
       ready: true,
       spectator: false,
       bot: true,

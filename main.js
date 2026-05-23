@@ -14,7 +14,6 @@ const logoutButton = document.querySelector("#logout-button");
 const createRoomButton = document.querySelector("#create-room-button");
 const joinRoomButton = document.querySelector("#join-room-button");
 const readyButton = document.querySelector("#ready-button");
-const roomReplayButton = document.querySelector("#room-replay-button");
 const endRoomButton = document.querySelector("#end-room-button");
 const leaveRoomButton = document.querySelector("#leave-room-button");
 const copyRoomButton = document.querySelector("#copy-room-button");
@@ -28,6 +27,9 @@ const roomSheetStatus = document.querySelector("#room-sheet-status");
 const roomReadyButton = document.querySelector("#room-ready-button");
 const roomList = document.querySelector("#room-list");
 const styleButtons = [...document.querySelectorAll(".style-button")];
+const themeMenu = document.querySelector("#theme-menu");
+const themeSummarySwatch = document.querySelector("#theme-summary-swatch");
+const themeSummaryLabel = document.querySelector("#theme-summary-label");
 
 const VIEW = {
   width: canvas.width,
@@ -351,11 +353,24 @@ function setActiveStyle(nextStyle) {
   const style = styles[activeStyle];
   shell.dataset.style = activeStyle;
   setCssVars(style);
+  themeSummarySwatch.className = `swatch swatch-${activeStyle}`;
+  themeSummaryLabel.textContent = activeStyle === "steampunk" ? "Steam" : activeStyle === "cyberpunk" ? "Cyber" : "Future";
 
   for (const button of styleButtons) {
     const isActive = button.dataset.style === activeStyle;
     button.classList.toggle("is-active", isActive);
     button.setAttribute("aria-pressed", String(isActive));
+  }
+}
+
+function setButtonLabel(button, label) {
+  const labelNode = button?.querySelector(".button-label");
+  if (labelNode) {
+    labelNode.textContent = label;
+    return;
+  }
+  if (button) {
+    button.textContent = label;
   }
 }
 
@@ -415,7 +430,7 @@ async function setAudioEnabled(enabled) {
 }
 
 function updateAudioButton() {
-  audioButton.textContent = audioState.enabled ? "Sound On" : "Sound Off";
+  setButtonLabel(audioButton, audioState.enabled ? "Sound On" : "Sound Off");
   audioButton.setAttribute("aria-pressed", String(audioState.enabled));
 }
 
@@ -510,7 +525,7 @@ function updateDemoAudio(style, loop, time) {
   if (!audioState.enabled || !audioState.unlocked || !audioState.context) return;
 
   if (sessionState.room) {
-    if (sessionState.room.phase === "repair" && getCountdownMs() <= 5000 && time >= audioState.nextHazardAt) {
+    if (sessionState.room.phase === "repair" && getCountdownMs() <= 7500 && time >= audioState.nextHazardAt) {
       playHazardBeep();
       audioState.nextHazardAt = time + 620;
     }
@@ -530,7 +545,7 @@ function updateDemoAudio(style, loop, time) {
     audioState.nextStepAt = time + (escaping ? 108 : 145) - Math.min(32, movingActors.length * 6);
   }
 
-  if (audioState.explosionCycle !== loop.cycle && loop.elapsed >= EXPLOSION_START && loop.elapsed < EXPLOSION_START + 900) {
+  if (audioState.explosionCycle !== loop.cycle && loop.elapsed >= EXPLOSION_START && loop.elapsed < EXPLOSION_START + 1350) {
     playExplosionSound(style);
     audioState.explosionCycle = loop.cycle;
   }
@@ -639,9 +654,9 @@ function updateSessionUi() {
   loginButton.classList.toggle("is-hidden", Boolean(user));
   logoutButton.classList.toggle("is-hidden", !user);
   createRoomButton.disabled = !user;
-  createRoomButton.textContent = "New";
+  setButtonLabel(createRoomButton, "New");
   joinRoomButton.disabled = !user;
-  joinRoomButton.textContent = "Rooms";
+  setButtonLabel(joinRoomButton, "Rooms");
   readyButton.disabled =
     !user || isSpectator || sessionState.room?.phase !== "lobby" || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
   copyRoomButton.disabled = !sessionState.roomId;
@@ -651,19 +666,15 @@ function updateSessionUi() {
   botToggle.disabled = !user || Boolean(sessionState.roomId);
   readyButton.classList.toggle("is-active", sessionState.ready);
   readyButton.setAttribute("aria-pressed", String(sessionState.ready));
-  readyButton.textContent = isSpectator ? "Watch" : "Ready";
-  roomReplayButton.disabled = !user || !local || isSpectator || !isEndPhase || replayVoted;
-  roomReplayButton.classList.toggle("is-active", replayVoted);
-  roomReplayButton.setAttribute("aria-pressed", String(replayVoted));
-  roomReplayButton.textContent = replayVoted ? "New game voted" : "New game";
+  setButtonLabel(readyButton, isSpectator ? "Watch" : "Ready");
   endRoomButton.disabled = !user || !sessionState.roomId || !isOwner;
   replayButton.disabled = Boolean(sessionState.room) && (!local || isSpectator || !isEndPhase || replayVoted);
   replayButton.classList.toggle("is-active", Boolean(sessionState.room) && replayVoted);
   replayButton.setAttribute("aria-pressed", String(Boolean(sessionState.room) && replayVoted));
-  replayButton.textContent = sessionState.room ? (replayVoted ? "Voted" : "New game") : "Replay";
-  startButton.textContent = shell.classList.contains("is-browsing-rooms") ? "Back" : "Start";
+  setButtonLabel(replayButton, sessionState.room ? (replayVoted ? "Voted" : "New game") : "Replay");
+  setButtonLabel(startButton, shell.classList.contains("is-browsing-rooms") ? "Back" : "Start");
   roomReadyButton.disabled = readyButton.disabled;
-  roomReadyButton.textContent = isSpectator ? "Spectating" : "Ready";
+  setButtonLabel(roomReadyButton, isSpectator ? "Spectating" : "Ready");
   sessionActions.classList.toggle("is-active", Boolean(sessionState.roomId));
   shell.classList.toggle("is-roomed", Boolean(sessionState.roomId));
   updateRoomSheet();
@@ -1964,7 +1975,7 @@ function drawBuildingCountdown(style, time) {
   if (!room || room.phase !== "repair") return;
 
   const seconds = getCountdownMs() / 1000;
-  const blink = seconds <= 5 ? Math.sin(time / 90) > -0.25 : Math.sin(time / 280) > -0.7;
+  const blink = seconds <= 7.5 ? Math.sin(time / 90) > -0.25 : Math.sin(time / 280) > -0.7;
 
   const label = getCountdownLabel().padStart(5, "0");
   const x = 365;
@@ -1972,7 +1983,7 @@ function drawBuildingCountdown(style, time) {
   ctx.globalAlpha = blink ? 1 : 0.46;
   px(x - 18, y - 21, 86, 31, "rgba(0, 0, 0, 0.68)");
   px(x - 18, y - 21, 86, 3, style.scene.accent);
-  ctx.fillStyle = seconds <= 5 ? "#ff6b28" : style.css.text;
+  ctx.fillStyle = seconds <= 7.5 ? "#ff6b28" : style.css.text;
   ctx.font = "24px monospace";
   ctx.fillText(label, x, y);
   ctx.globalAlpha = 1;
@@ -1984,12 +1995,14 @@ function drawRoomHud(style) {
   if (room.phase === "end") return;
 
   const local = room.players?.[sessionState.user?.login];
-  px(8, 8, 118, 24, "rgba(0, 0, 0, 0.58)");
+  px(8, 8, 128, 34, "rgba(0, 0, 0, 0.58)");
   ctx.fillStyle = style.css.text;
   ctx.font = "7px monospace";
-  const scoreLabel = local?.spectator ? "WATCH" : formatScore(local?.score);
+  const totalLabel = local?.spectator ? "WATCH" : formatScore(local?.score);
+  const roundLabel = local?.spectator ? "--" : formatScore(local?.roundScore);
   ctx.fillText(`TIME ${getCountdownLabel()}s`, 14, 18);
-  ctx.fillText(`SCORE ${scoreLabel}`, 14, 28);
+  ctx.fillText(`ROUND ${roundLabel}`, 14, 28);
+  ctx.fillText(`TOTAL ${totalLabel}`, 14, 38);
 }
 
 function drawRoundSummary(style, summary, options = {}) {
@@ -2007,8 +2020,13 @@ function drawRoundSummary(style, summary, options = {}) {
   ctx.font = "7px monospace";
   for (let i = 0; i < visibleRows.length; i += 1) {
     const row = visibleRows[i];
-    const label = row.caughtInBlast ? "BLAST" : "CLEAR";
-    ctx.fillText(`${row.id.slice(0, 8)} ${formatScore(row.score)} ${label}`, panelX + 12, panelY + 34 + i * 12);
+    const state = row.state === "incapacitated" ? "DOWN" : "OK";
+    const roundPrefix = row.roundScore > 0 ? "+" : "";
+    ctx.fillText(
+      `${row.id.slice(0, 8)} ${roundPrefix}${formatScore(row.roundScore)} / ${formatScore(row.score)} ${state}`,
+      panelX + 12,
+      panelY + 34 + i * 12,
+    );
   }
 }
 
@@ -2030,8 +2048,8 @@ function drawFinalScoreScene(style) {
   drawRoundSummary(style, summary, {
     x: 92,
     y: 62,
-    width: 200,
-    title: "PLAYER SCORES",
+    width: 238,
+    title: "ROUND / TOTAL",
   });
 
   const players = Object.values(room?.players || {}).filter((player) => !player.spectator);
@@ -2475,7 +2493,6 @@ createRoomButton.addEventListener("click", createRoom);
 joinRoomButton.addEventListener("click", showActiveRooms);
 readyButton.addEventListener("click", toggleReady);
 roomReadyButton.addEventListener("click", toggleReady);
-roomReplayButton.addEventListener("click", voteReplayRoom);
 endRoomButton.addEventListener("click", endRoomGame);
 leaveRoomButton.addEventListener("click", leaveRoom);
 copyRoomButton.addEventListener("click", copyRoomLink);
@@ -2497,6 +2514,7 @@ roomCodeInput.addEventListener("keydown", (event) => {
 for (const button of styleButtons) {
   button.addEventListener("click", () => {
     setActiveStyle(button.dataset.style);
+    themeMenu.open = false;
   });
 }
 

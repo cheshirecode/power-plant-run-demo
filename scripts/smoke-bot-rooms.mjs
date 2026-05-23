@@ -53,24 +53,58 @@ async function smokeBotRoom(playerCount) {
     assert(bot.spectator === false, `bot is spectating in ${roomId}`);
     assert(repairState.targetPlayerCount === playerCount, `target count mismatch in ${roomId}`);
 
-    const startX = bot.x;
-    const startY = bot.y;
-    const movedState = await waitForState(
-      sockets[0],
-      (state) => {
-        const nextBot = state.players?.["bot-1"];
-        return state.phase === "repair" && nextBot && Math.hypot(nextBot.x - startX, nextBot.y - startY) >= 4;
-      },
-      5_000,
-    );
-    const movedBot = movedState.players["bot-1"];
-    assert(movedBot.botTargetNodeId || movedBot.x !== startX || movedBot.y !== startY, `bot target missing in ${roomId}`);
+    const botMoves = await collectBotMoves(sockets[0], 4, 5_000);
+    assert(botMoves.some((move) => move.distance > 0), `bot did not move in ${roomId}`);
+    assert(botMoves.every((move) => move.distance <= 12), `bot jumped too far in ${roomId}: ${botMoves.map((move) => move.distance).join(",")}`);
+    assert(botMoves.at(-1).bot.botTargetNodeId, `bot target missing in ${roomId}`);
   } finally {
     await deleteRoom({ id: roomId, cookie: owner.cookie });
     for (const socket of sockets) {
       socket.close();
     }
   }
+}
+
+async function collectBotMoves(socket, count, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const moves = [];
+    let previousBot = null;
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("timed out waiting for bot moves"));
+    }, timeoutMs);
+
+    const onMessage = (data) => {
+      const state = JSON.parse(String(data)).state;
+      const bot = state?.players?.["bot-1"];
+      if (!bot || state.phase !== "repair") return;
+      if (previousBot) {
+        const distance = Math.hypot(bot.x - previousBot.x, bot.y - previousBot.y);
+        if (distance > 0) {
+          moves.push({ bot, distance });
+        }
+      }
+      previousBot = { x: bot.x, y: bot.y };
+      if (moves.length >= count) {
+        cleanup();
+        resolve(moves);
+      }
+    };
+
+    const onClose = () => {
+      cleanup();
+      reject(new Error("websocket closed while waiting for bot moves"));
+    };
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off("message", onMessage);
+      socket.off("close", onClose);
+    };
+
+    socket.on("message", onMessage);
+    socket.on("close", onClose);
+  });
 }
 
 async function connectRoom(roomId, cookie, options) {

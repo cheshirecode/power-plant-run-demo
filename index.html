@@ -20,18 +20,31 @@
         <div class="controls" aria-label="Game controls">
           <div class="session-controls" aria-label="Session controls">
             <span class="session-status" id="auth-status">Signed out</span>
-            <button class="control-button" type="button" id="login-button">GitHub</button>
-            <button class="control-button is-hidden" type="button" id="logout-button">Logout</button>
+            <button class="control-button" type="button" id="login-button">
+              <span class="button-icon icon-github" aria-hidden="true"></span>
+              <span class="button-label">GitHub</span>
+            </button>
+            <button class="control-button is-hidden" type="button" id="logout-button">
+              <span class="button-icon icon-logout" aria-hidden="true"></span>
+              <span class="button-label">Logout</span>
+            </button>
           </div>
 
           <div class="room-controls" aria-label="Room controls">
-            <button class="control-button" type="button" id="create-room-button">New</button>
+            <button class="control-button" type="button" id="create-room-button">
+              <span class="button-icon icon-plus" aria-hidden="true"></span>
+              <span class="button-label">New</span>
+            </button>
             <select class="room-select" id="room-size-input" aria-label="Active player slots" title="Active player slots">
               <option value="1">1 player</option>
               <option value="2" selected>2 players</option>
               <option value="3">3 players</option>
               <option value="4">4 players</option>
             </select>
+            <button class="replay-button" type="button" id="replay-button" aria-label="Replay run">
+              <span class="button-icon icon-replay" aria-hidden="true"></span>
+              <span class="button-label">Replay</span>
+            </button>
             <label class="bot-toggle" title="Add one AI runner">
               <input id="bot-toggle" type="checkbox" />
               <span>Bot</span>
@@ -49,40 +62,61 @@
                 title="Create: optional room name. Enter an existing room code and press Enter."
               />
             </label>
-            <button class="control-button" type="button" id="join-room-button">Rooms</button>
+            <button class="control-button" type="button" id="join-room-button">
+              <span class="button-icon icon-rooms" aria-hidden="true"></span>
+              <span class="button-label">Rooms</span>
+            </button>
             <details class="action-menu" id="session-actions">
-              <summary>Session</summary>
+              <summary>
+                <span class="button-icon icon-session" aria-hidden="true"></span>
+                <span class="button-label">Session</span>
+              </summary>
               <div class="action-menu-panel" aria-label="Session actions">
-                <button class="control-button" type="button" id="ready-button" aria-pressed="false">Ready</button>
-                <button class="control-button" type="button" id="room-replay-button" aria-pressed="false">New game</button>
-                <button class="control-button" type="button" id="end-room-button">End session</button>
-                <button class="control-button" type="button" id="leave-room-button">Leave</button>
-                <button class="control-button" type="button" id="copy-room-button">Copy</button>
+                <button class="control-button" type="button" id="ready-button" aria-pressed="false">
+                  <span class="button-icon icon-ready" aria-hidden="true"></span>
+                  <span class="button-label">Ready</span>
+                </button>
+                <button class="control-button" type="button" id="end-room-button">
+                  <span class="button-icon icon-end" aria-hidden="true"></span>
+                  <span class="button-label">End session</span>
+                </button>
+                <button class="control-button" type="button" id="leave-room-button">
+                  <span class="button-icon icon-leave" aria-hidden="true"></span>
+                  <span class="button-label">Leave</span>
+                </button>
+                <button class="control-button" type="button" id="copy-room-button">
+                  <span class="button-icon icon-copy" aria-hidden="true"></span>
+                  <span class="button-label">Copy</span>
+                </button>
               </div>
             </details>
             <span class="session-status" id="room-status">Solo</span>
           </div>
 
-          <div class="style-switcher" aria-label="Graphics style">
-            <button class="style-button is-active" type="button" data-style="steampunk" aria-pressed="true">
-              <span class="swatch swatch-steampunk" aria-hidden="true"></span>
-              Steam
-            </button>
-            <button class="style-button" type="button" data-style="cyberpunk" aria-pressed="false">
-              <span class="swatch swatch-cyberpunk" aria-hidden="true"></span>
-              Cyber
-            </button>
-            <button class="style-button" type="button" data-style="futuristic" aria-pressed="false">
-              <span class="swatch swatch-futuristic" aria-hidden="true"></span>
-              Future
-            </button>
-          </div>
+          <details class="action-menu style-switcher" id="theme-menu" aria-label="Graphics style">
+            <summary>
+              <span class="swatch swatch-steampunk" id="theme-summary-swatch" aria-hidden="true"></span>
+              <span class="button-label" id="theme-summary-label">Steam</span>
+            </summary>
+            <div class="action-menu-panel style-menu-panel">
+              <button class="style-button is-active" type="button" data-style="steampunk" aria-pressed="true">
+                <span class="swatch swatch-steampunk" aria-hidden="true"></span>
+                <span class="button-label">Steam</span>
+              </button>
+              <button class="style-button" type="button" data-style="cyberpunk" aria-pressed="false">
+                <span class="swatch swatch-cyberpunk" aria-hidden="true"></span>
+                <span class="button-label">Cyber</span>
+              </button>
+              <button class="style-button" type="button" data-style="futuristic" aria-pressed="false">
+                <span class="swatch swatch-futuristic" aria-hidden="true"></span>
+                <span class="button-label">Future</span>
+              </button>
+            </div>
+          </details>
 
-          <button class="replay-button" type="button" id="replay-button" aria-label="Replay run">
-            Replay
-          </button>
           <button class="replay-button" type="button" id="audio-button" aria-pressed="false">
-            Sound Off
+            <span class="button-icon icon-sound" aria-hidden="true"></span>
+            <span class="button-label">Sound Off</span>
           </button>
         </div>
       </header>

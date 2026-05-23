@@ -36,6 +36,11 @@ provided player id.
 - Rooms can include one server-controlled bot. The bot is not counted against
   human player slots, is always ready, chases useful nodes, and retreats when
   the countdown is nearly spent.
+- Scores are split into banked total score and current round score. Explosion
+  only wipes the current round score; surviving players bank their current round
+  score into their total when the summary is created.
+- Player state is currently a tiny FSM: `alive` at round start, then
+  `incapacitated` if caught in the explosion.
 - A room can run multiple games through the New game vote. End session closes
   the room and removes it from the public room list.
 
