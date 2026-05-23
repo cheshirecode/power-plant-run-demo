@@ -1,0 +1,20 @@
+{
+  "name": "Power Plant Run",
+  "short_name": "Plant Run",
+  "icons": [
+    {
+      "src": "/icons/favicon.svg",
+      "sizes": "32x32",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/icons/game-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "theme_color": "#1b1a14",
+  "background_color": "#11140f",
+  "display": "standalone"
+}

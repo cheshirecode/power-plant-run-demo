@@ -4,3 +4,6 @@
 !/styles.css
 !/client
 !/client/**
+!/icons
+!/icons/**
+!/site.webmanifest
