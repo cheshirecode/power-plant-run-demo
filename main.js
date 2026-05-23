@@ -200,8 +200,9 @@ const REBUILD_START = 84000;
 const REBUILD_END = 100000;
 const DEMO_TIME_SCALE = 1;
 const DEMO_REPAIR_DURATION = 60000;
-const DEMO_NODE_SPAWN_MS = 3000;
+const DEMO_NODE_SPAWN_MS = 2000;
 const DEMO_INITIAL_NODE_COUNT = 3;
+const DEMO_RUNNER_SPEED = 1.45;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_SUMMARY_START = EXPLOSION_START + 1400;
 const DEMO_VORTEX_START = REBUILD_END - 1800;
@@ -621,7 +622,8 @@ function getDemoActorState(member, index, loop, time) {
   const frozen = freezeActive && ability.id !== "stasis" && loop.elapsed < EXPLOSION_START;
 
   if (loop.elapsed < EXPLOSION_START) {
-    const speed = ability.id === "boost" ? 1.28 : ability.id === "blink" ? 1.12 : 1;
+    const abilitySpeed = ability.id === "boost" ? 1.32 : ability.id === "blink" ? 1.16 : 1;
+    const speed = DEMO_RUNNER_SPEED * abilitySpeed;
     const blinkHop = ability.id === "blink" && loop.elapsed % 1800 < 220 ? 0.045 : 0;
     const progress = clamp((loop.elapsed * speed - index * 340) / (EXPLOSION_START - 900) + blinkHop, 0, 1);
     const targets = getDemoNodePlan(member, index, loop.cycle);
