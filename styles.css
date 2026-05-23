@@ -108,6 +108,25 @@ h1 {
   white-space: nowrap;
 }
 
+.room-field {
+  position: relative;
+  display: block;
+  width: 230px;
+  min-width: 180px;
+}
+
+.room-field span {
+  position: absolute;
+  top: 3px;
+  left: 10px;
+  z-index: 1;
+  color: var(--muted);
+  font-size: 0.44rem;
+  line-height: 1;
+  pointer-events: none;
+  text-transform: uppercase;
+}
+
 .style-switcher {
   display: flex;
   min-width: 0;
@@ -193,6 +212,11 @@ h1 {
   line-height: 1;
   padding: 0 8px;
   text-transform: lowercase;
+}
+
+.room-field .room-input {
+  width: 100%;
+  padding-top: 11px;
 }
 
 .room-select {
@@ -353,6 +377,58 @@ h1 {
   transform: translateY(1px);
 }
 
+.room-list {
+  display: grid;
+  width: min(520px, calc(100vw - 64px));
+  max-height: 170px;
+  gap: 6px;
+  overflow: auto;
+  text-align: left;
+}
+
+.room-list-title,
+.room-list-empty {
+  color: var(--muted);
+  font-size: 0.6rem;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.room-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, #000);
+  background: rgba(0, 0, 0, 0.34);
+}
+
+.room-list-row span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.62rem;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-list-button {
+  min-height: 28px;
+  border: 1px solid var(--border);
+  background: var(--panel-strong);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.56rem;
+  text-transform: uppercase;
+}
+
+.room-list-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 #game-canvas {
   width: min(100%, calc((100vh - 150px) * 16 / 9), 1120px);
   aspect-ratio: 16 / 9;
@@ -396,7 +472,12 @@ h1 {
 
   .room-controls {
     display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto;
+  }
+
+  .room-field {
+    width: auto;
+    min-width: 0;
   }
 
   .room-controls .session-status {

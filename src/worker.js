@@ -26,6 +26,7 @@ const BLAST_CENTER = { x: 244, y: 108 };
 const BLAST_RADIUS_BASE = 92;
 const BLAST_RADIUS_JITTER = 10;
 const MAX_PLAYERS = 4;
+const knownRoomIds = new Set();
 const START_NODES = [
   { id: "n1", x: 72, y: 176 },
   { id: "n2", x: 94, y: 70 },
@@ -57,11 +58,23 @@ export class GameRoom {
       players: {},
       nodes: cloneNodes(),
       score: 0,
+      ownerId: null,
+      replayVotes: {},
+      closed: false,
     };
   }
 
   async fetch(request) {
     await this.advanceTimedPhase();
+    const url = new URL(request.url);
+    const roomMatch = url.pathname.match(/^\/(?:api|ws)\/rooms\/([^/]+)$/);
+    if (roomMatch && !this.roomState.id) {
+      this.roomState.id = roomMatch[1].toLowerCase();
+    }
+    if (request.headers.get("X-PPR-Room-Status") === "1") {
+      return json({ ok: true, room: this.roomSummary() });
+    }
+
     const player = await getAuthenticatedPlayer(request, this.env);
     if (!player) {
       return json({ error: "Sign in required" }, 401);
@@ -74,15 +87,18 @@ export class GameRoom {
       });
     }
 
-    const url = new URL(request.url);
     const targetPlayerCount = clampNumber(url.searchParams.get("players"), 1, MAX_PLAYERS);
+    const spectate = url.searchParams.get("spectate") === "1";
+    if (this.roomState.closed) {
+      return json({ error: "Room closed" }, 410);
+    }
     if (this.roomState.phase === "lobby" && Object.keys(this.roomState.players).length === 0) {
       this.roomState.targetPlayerCount = targetPlayerCount;
     }
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.acceptPlayer(server, player);
+    this.acceptPlayer(server, player, spectate);
 
     return new Response(null, {
       status: 101,
@@ -90,12 +106,13 @@ export class GameRoom {
     });
   }
 
-  acceptPlayer(socket, player) {
+  acceptPlayer(socket, player, spectate = false) {
     socket.accept();
     const playerId = player.id;
     this.sessions.set(socket, playerId);
     const existingPlayer = this.roomState.players[playerId];
     const activePlayers = Object.values(this.roomState.players).filter((player) => !player.spectator);
+    const isSpectator = spectate || this.roomState.phase !== "lobby" || (!existingPlayer && activePlayers.length >= this.roomState.targetPlayerCount);
     this.roomState.players[playerId] ||= {
       id: playerId,
       login: player.login,
@@ -105,9 +122,13 @@ export class GameRoom {
       x: 42,
       y: 178,
       score: 0,
+      roundScore: 0,
       ready: false,
-      spectator: this.roomState.phase !== "lobby" || activePlayers.length >= this.roomState.targetPlayerCount,
+      spectator: isSpectator,
     };
+    if (!this.roomState.ownerId && !this.roomState.players[playerId].spectator) {
+      this.roomState.ownerId = playerId;
+    }
 
     socket.send(
       JSON.stringify({
@@ -129,6 +150,10 @@ export class GameRoom {
       const hasOtherSession = Array.from(this.sessions.values()).some((sessionPlayerId) => sessionPlayerId === playerId);
       if (!hasOtherSession) {
         delete this.roomState.players[playerId];
+        delete this.roomState.replayVotes[playerId];
+        if (this.roomState.ownerId === playerId) {
+          this.roomState.ownerId = Object.values(this.roomState.players).find((nextPlayer) => !nextPlayer.spectator)?.id || null;
+        }
       }
       this.broadcastState("player:left");
     };
@@ -158,6 +183,22 @@ export class GameRoom {
       return;
     }
 
+    if (message.type === "replay") {
+      if (this.roomState.phase !== "end") return;
+      const player = this.roomState.players[playerId];
+      if (!player || player.spectator) return;
+      this.roomState.replayVotes[playerId] = true;
+      await this.maybeReplayRun();
+      this.broadcastState("room:state");
+      return;
+    }
+
+    if (message.type === "end-game") {
+      if (this.roomState.ownerId !== playerId) return;
+      await this.closeRoom();
+      return;
+    }
+
     if (message.type === "move" || message.type === "player:move") {
       if (this.roomState.players[playerId].spectator) return;
       if (this.roomState.phase !== "repair") return;
@@ -173,17 +214,34 @@ export class GameRoom {
     if (this.roomState.phase !== "lobby" || players.length === 0) return;
     if (players.length < this.roomState.targetPlayerCount) return;
     if (!players.every((player) => player.ready)) return;
+    await this.startRun(true);
+  }
 
+  async maybeReplayRun() {
+    const players = Object.values(this.roomState.players).filter((player) => !player.spectator);
+    if (players.length === 0) return;
+    if (!players.every((player) => this.roomState.replayVotes[player.id])) return;
+    await this.startRun(false);
+  }
+
+  async startRun(resetScores) {
+    const players = Object.values(this.roomState.players).filter((player) => !player.spectator);
     this.roomState.cycle += 1;
     this.roomState.startedAt = Date.now();
     this.roomState.nodes = cloneNodes();
     this.roomState.score = 0;
     this.roomState.summary = null;
     this.roomState.blast = makeBlast();
+    this.roomState.replayVotes = {};
+    this.roomState.closed = false;
     this.roomState.countdownEndsAt = Date.now() + ROUND_COUNTDOWN_MS;
     for (const player of players) {
-      player.score = 0;
+      if (resetScores) {
+        player.score = 0;
+      }
+      player.roundScore = 0;
       player.caughtInBlast = false;
+      player.ready = false;
     }
     await this.setPhase("repair", ROUND_COUNTDOWN_MS);
   }
@@ -238,7 +296,8 @@ export class GameRoom {
     delete node.claimedBy;
     delete node.claimedAt;
     delete node.claimEndsAt;
-    player.score = roundValue(player.score + node.value);
+    player.score = roundValue((player.score || 0) + node.value);
+    player.roundScore = roundValue((player.roundScore || 0) + node.value);
     this.roomState.score = roundValue(this.roomState.score + node.value);
     this.roomState.countdownEndsAt += Math.round(node.value * 1000);
     await this.scheduleNextRepairAlarm();
@@ -293,6 +352,7 @@ export class GameRoom {
       player.caughtInBlast = caught;
       if (caught) {
         player.score = 0;
+        player.roundScore = 0;
       }
     }
   }
@@ -303,9 +363,37 @@ export class GameRoom {
       .map((player) => ({
         id: player.id,
         score: roundValue(player.score),
+        roundScore: roundValue(player.roundScore || 0),
         caughtInBlast: Boolean(player.caughtInBlast),
       }))
       .sort((a, b) => b.score - a.score);
+  }
+
+  async closeRoom() {
+    this.roomState.closed = true;
+    this.roomState.phase = "closed";
+    this.roomState.replayVotes = {};
+    this.broadcast({ type: "room:closed", state: this.roomState });
+    for (const socket of this.sessions.keys()) {
+      socket.close(1000, "Room closed");
+    }
+  }
+
+  roomSummary() {
+    const players = Object.values(this.roomState.players);
+    const activeCount = players.filter((player) => !player.spectator).length;
+    const spectatorCount = players.filter((player) => player.spectator).length;
+    return {
+      id: this.roomState.id,
+      phase: this.roomState.phase,
+      targetPlayerCount: this.roomState.targetPlayerCount,
+      activeCount,
+      spectatorCount,
+      openSlots: Math.max(0, this.roomState.targetPlayerCount - activeCount),
+      ownerId: this.roomState.ownerId,
+      closed: Boolean(this.roomState.closed),
+      cycle: this.roomState.cycle,
+    };
   }
 
   nextRole() {
@@ -339,7 +427,7 @@ function cloneNodes() {
       repaired: false,
       bonus,
       value,
-      radius: nodeRadius(node, bonus),
+      radius: nodeRadius(value, bonus),
       holdMs: nodeHoldMs(value),
       seed: Math.random() + index,
     };
@@ -372,9 +460,8 @@ function nodeValue(node, bonus = false) {
   return roundValue(clampNumber(NODE_VALUE_MIN + closeness * (NODE_VALUE_MAX - NODE_VALUE_MIN), NODE_VALUE_MIN, NODE_VALUE_MAX));
 }
 
-function nodeRadius(node, bonus = false) {
+function nodeRadius(value, bonus = false) {
   if (bonus) return NODE_REPAIR_RADIUS_MAX;
-  const value = nodeValue(node, false);
   const scale = (value - NODE_VALUE_MIN) / (NODE_VALUE_MAX - NODE_VALUE_MIN);
   return Math.round(NODE_REPAIR_RADIUS_MIN + scale * (NODE_REPAIR_RADIUS_MAX - NODE_REPAIR_RADIUS_MIN));
 }
@@ -447,6 +534,34 @@ export default {
       });
     }
 
+    if (url.pathname === "/api/rooms" && request.method === "GET") {
+      const session = await readSession(request, env);
+      if (!session) {
+        return json({ error: "Sign in required" }, 401);
+      }
+
+      const rooms = [];
+      for (const roomId of knownRoomIds) {
+        const objectId = env.ROOMS.idFromName(roomId);
+        const room = env.ROOMS.get(objectId);
+        const statusResponse = await room.fetch(
+          new Request(`https://internal/api/rooms/${roomId}`, {
+            headers: { "X-PPR-Room-Status": "1" },
+          }),
+        );
+        if (!statusResponse.ok) continue;
+        const status = await statusResponse.json();
+        if (status.room?.closed) {
+          knownRoomIds.delete(roomId);
+        } else if (status.room?.activeCount > 0 || status.room?.phase !== "lobby") {
+          rooms.push(status.room);
+        }
+      }
+
+      rooms.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      return json({ rooms });
+    }
+
     if (url.pathname === "/api/rooms" && request.method === "POST") {
       const session = await readSession(request, env);
       if (!session) {
@@ -461,6 +576,7 @@ export default {
         targetPlayerCount = 2;
       }
       const roomId = crypto.randomUUID().slice(0, 8);
+      knownRoomIds.add(roomId);
       return json({
         roomId,
         targetPlayerCount,
@@ -475,6 +591,7 @@ export default {
         return json({ error: "Invalid room id" }, 400);
       }
 
+      knownRoomIds.add(roomId);
       const objectId = env.ROOMS.idFromName(roomId);
       const room = env.ROOMS.get(objectId);
       return room.fetch(request);

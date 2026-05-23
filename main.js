@@ -14,6 +14,8 @@ const logoutButton = document.querySelector("#logout-button");
 const createRoomButton = document.querySelector("#create-room-button");
 const joinRoomButton = document.querySelector("#join-room-button");
 const readyButton = document.querySelector("#ready-button");
+const roomReplayButton = document.querySelector("#room-replay-button");
+const endRoomButton = document.querySelector("#end-room-button");
 const leaveRoomButton = document.querySelector("#leave-room-button");
 const copyRoomButton = document.querySelector("#copy-room-button");
 const roomSizeInput = document.querySelector("#room-size-input");
@@ -22,6 +24,7 @@ const roomStatus = document.querySelector("#room-status");
 const roomSheet = document.querySelector("#room-sheet");
 const roomSheetStatus = document.querySelector("#room-sheet-status");
 const roomReadyButton = document.querySelector("#room-ready-button");
+const roomList = document.querySelector("#room-list");
 const styleButtons = [...document.querySelectorAll(".style-button")];
 
 const VIEW = {
@@ -308,6 +311,9 @@ const sessionState = {
   localPosition: null,
   nextRoomPollAt: 0,
   pollingRoom: false,
+  rooms: [],
+  loadingRooms: false,
+  nextRoomListPollAt: 0,
 };
 
 ctx.imageSmoothingEnabled = false;
@@ -577,6 +583,7 @@ async function loadSession() {
   }
 
   updateSessionUi();
+  loadRoomList();
   if (sessionState.user && roomFromUrl) {
     connectRoom(roomFromUrl);
   }
@@ -586,11 +593,14 @@ function updateSessionUi() {
   const user = sessionState.user;
   const local = getLocalPlayer();
   const isSpectator = Boolean(local?.spectator);
+  const isEndPhase = sessionState.room?.phase === "end";
+  const replayVoted = Boolean(local && sessionState.room?.replayVotes?.[local.id]);
+  const isOwner = Boolean(local && sessionState.room?.ownerId === local.id);
   authStatus.textContent = user ? `@${user.login}` : "Signed out";
   loginButton.classList.toggle("is-hidden", Boolean(user));
   logoutButton.classList.toggle("is-hidden", !user);
   createRoomButton.disabled = !user;
-  createRoomButton.textContent = sessionState.roomId ? "New" : "Create";
+  createRoomButton.textContent = sessionState.roomId ? "New room" : "Create room";
   joinRoomButton.disabled = !user;
   readyButton.disabled =
     !user || isSpectator || sessionState.room?.phase !== "lobby" || !sessionState.socket || sessionState.socket.readyState !== WebSocket.OPEN;
@@ -601,10 +611,16 @@ function updateSessionUi() {
   readyButton.classList.toggle("is-active", sessionState.ready);
   readyButton.setAttribute("aria-pressed", String(sessionState.ready));
   readyButton.textContent = isSpectator ? "Watch" : "Ready";
+  roomReplayButton.disabled = !user || !local || isSpectator || !isEndPhase || replayVoted;
+  roomReplayButton.classList.toggle("is-active", replayVoted);
+  roomReplayButton.setAttribute("aria-pressed", String(replayVoted));
+  roomReplayButton.textContent = replayVoted ? "Replay voted" : "Replay";
+  endRoomButton.disabled = !user || !sessionState.roomId || !isOwner;
   roomReadyButton.disabled = readyButton.disabled;
   roomReadyButton.textContent = isSpectator ? "Spectating" : "Ready";
   shell.classList.toggle("is-roomed", Boolean(sessionState.roomId));
   updateRoomSheet();
+  renderRoomList();
 }
 
 function updateRoomStatus(nextStatus = null) {
@@ -649,12 +665,26 @@ function updateRoomSheet() {
 
 async function createRoom() {
   if (!sessionState.user) return;
+  const previousRoomId = sessionState.roomId;
+  if (previousRoomId) {
+    disconnectRoom();
+    sessionState.roomId = "";
+    sessionState.ready = false;
+    sessionState.room = null;
+    sessionState.target = null;
+    sessionState.localPosition = null;
+    sessionState.briefingDismissedFor = "";
+    clearRoomUrl();
+  }
   updateRoomStatus("Creating");
 
   const namedRoomId = normalizeRoomId(roomCodeInput.value);
-  if (namedRoomId) {
+  if (namedRoomId && namedRoomId !== previousRoomId) {
     connectRoom(namedRoomId);
     return;
+  }
+  if (namedRoomId === previousRoomId) {
+    roomCodeInput.value = "";
   }
 
   try {
@@ -678,7 +708,7 @@ async function createRoom() {
   }
 }
 
-function leaveRoom() {
+function leaveRoom(status = null) {
   disconnectRoom();
   sessionState.roomId = "";
   sessionState.ready = false;
@@ -688,9 +718,11 @@ function leaveRoom() {
   sessionState.briefingDismissedFor = "";
   roomCodeInput.value = "";
   clearRoomUrl();
-  updateRoomStatus();
+  shell.classList.add("is-gated");
+  updateRoomStatus(status);
   updateSessionUi();
   updateRoomSheet();
+  loadRoomList();
 }
 
 function joinRoom() {
@@ -704,7 +736,7 @@ function joinRoom() {
   connectRoom(roomId);
 }
 
-function connectRoom(roomId) {
+function connectRoom(roomId, options = {}) {
   disconnectRoom();
   sessionState.roomId = roomId;
   sessionState.ready = false;
@@ -719,7 +751,11 @@ function connectRoom(roomId) {
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const targetPlayerCount = getSelectedRoomSize();
-  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/rooms/${roomId}?players=${targetPlayerCount}`);
+  const params = new URLSearchParams({ players: String(targetPlayerCount) });
+  if (options.spectate) {
+    params.set("spectate", "1");
+  }
+  const socket = new WebSocket(`${protocol}//${window.location.host}/ws/rooms/${roomId}?${params.toString()}`);
   sessionState.socket = socket;
 
   socket.addEventListener("open", () => {
@@ -736,6 +772,10 @@ function connectRoom(roomId) {
 
   socket.addEventListener("close", () => {
     if (sessionState.socket !== socket) return;
+    if (!sessionState.room) {
+      leaveRoom("Room unavailable");
+      return;
+    }
     sessionState.socket = null;
     sessionState.ready = false;
     updateRoomStatus(sessionState.roomId ? "Disconnected" : "Solo");
@@ -765,6 +805,11 @@ function handleRoomMessage(rawMessage) {
     return;
   }
 
+  if (message.type === "room:closed" || message.state?.phase === "closed") {
+    leaveRoom("Room closed");
+    return;
+  }
+
   if (message.state) {
     sessionState.room = message.state;
     sessionState.ready = Boolean(message.state.players?.[sessionState.user?.login]?.ready);
@@ -774,6 +819,82 @@ function handleRoomMessage(rawMessage) {
   updateRoomStatus();
   updateSessionUi();
   updateRoomSheet();
+}
+
+async function loadRoomList() {
+  if (!sessionState.user || sessionState.loadingRooms) {
+    renderRoomList();
+    return;
+  }
+
+  sessionState.loadingRooms = true;
+  try {
+    const response = await fetch("/api/rooms", { headers: { Accept: "application/json" } });
+    if (response.ok) {
+      const payload = await response.json();
+      sessionState.rooms = Array.isArray(payload.rooms) ? payload.rooms : [];
+    }
+  } catch {
+    // The list is a convenience; direct room links still work.
+  } finally {
+    sessionState.loadingRooms = false;
+    renderRoomList();
+  }
+}
+
+function pollRoomList(time) {
+  if (!sessionState.user || sessionState.roomId || time < sessionState.nextRoomListPollAt) return;
+  sessionState.nextRoomListPollAt = time + 5000;
+  loadRoomList();
+}
+
+function renderRoomList() {
+  if (!roomList) return;
+  roomList.replaceChildren();
+  if (!sessionState.user) {
+    roomList.textContent = "Sign in to see open rooms.";
+    return;
+  }
+
+  const title = document.createElement("div");
+  title.className = "room-list-title";
+  title.textContent = "Open rooms";
+  roomList.append(title);
+
+  const rooms = sessionState.rooms.filter((room) => !room.closed);
+  if (rooms.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "room-list-empty";
+    empty.textContent = "No rooms yet. Create one.";
+    roomList.append(empty);
+    return;
+  }
+
+  for (const room of rooms) {
+    const row = document.createElement("div");
+    row.className = "room-list-row";
+
+    const label = document.createElement("span");
+    label.textContent = `${room.id} · ${room.activeCount}/${room.targetPlayerCount} players · ${room.phase}`;
+    row.append(label);
+
+    const joinButton = document.createElement("button");
+    joinButton.type = "button";
+    joinButton.className = "room-list-button";
+    joinButton.textContent = "Join";
+    joinButton.disabled = room.openSlots < 1;
+    joinButton.addEventListener("click", () => connectRoom(room.id));
+    row.append(joinButton);
+
+    const spectateButton = document.createElement("button");
+    spectateButton.type = "button";
+    spectateButton.className = "room-list-button";
+    spectateButton.textContent = "Watch";
+    spectateButton.addEventListener("click", () => connectRoom(room.id, { spectate: true }));
+    row.append(spectateButton);
+
+    roomList.append(row);
+  }
 }
 
 async function pollRoomState(time) {
@@ -854,6 +975,14 @@ function toggleReady() {
   sessionState.ready = nextReady;
   sendRoomMessage({ type: "ready", ready: sessionState.ready });
   updateSessionUi();
+}
+
+function voteReplayRoom() {
+  sendRoomMessage({ type: "replay" });
+}
+
+function endRoomGame() {
+  sendRoomMessage({ type: "end-game" });
 }
 
 async function copyRoomLink() {
@@ -1767,7 +1896,8 @@ function drawRoundSummary(style, summary, options = {}) {
 }
 
 function drawFinalScoreScene(style) {
-  const summary = sessionState.room?.summary || [];
+  const room = sessionState.room;
+  const summary = room?.summary || [];
   px(0, 0, VIEW.width, VIEW.height, style.scene.groundDark);
   for (let y = 0; y < VIEW.height; y += 12) {
     for (let x = 0; x < VIEW.width; x += 12) {
@@ -1786,6 +1916,19 @@ function drawFinalScoreScene(style) {
     width: 200,
     title: "PLAYER SCORES",
   });
+
+  const players = Object.values(room?.players || {}).filter((player) => !player.spectator);
+  const votes = room?.replayVotes || {};
+  px(112, 158, 160, 42, "rgba(0, 0, 0, 0.62)");
+  ctx.fillStyle = style.css.text;
+  ctx.font = "7px monospace";
+  ctx.fillText("REPLAY VOTES", 150, 171);
+  for (let i = 0; i < players.length; i += 1) {
+    const player = players[i];
+    const voted = votes[player.id];
+    ctx.fillStyle = voted ? style.scene.accent : style.css.muted;
+    ctx.fillText(`${voted ? "READY" : "WAIT"} ${player.id.slice(0, 8)}`, 124, 184 + i * 8);
+  }
 }
 
 function getRoomVisualLoop(fallbackLoop) {
@@ -2170,6 +2313,8 @@ function render(now) {
   if (sessionState.room) {
     updateRoomPosition(loop, now);
     pollRoomState(now);
+  } else {
+    pollRoomList(now);
   }
   setStatus(loop);
   if (sessionState.room?.phase === "end") {
@@ -2213,6 +2358,8 @@ createRoomButton.addEventListener("click", createRoom);
 joinRoomButton.addEventListener("click", joinRoom);
 readyButton.addEventListener("click", toggleReady);
 roomReadyButton.addEventListener("click", toggleReady);
+roomReplayButton.addEventListener("click", voteReplayRoom);
+endRoomButton.addEventListener("click", endRoomGame);
 leaveRoomButton.addEventListener("click", leaveRoom);
 copyRoomButton.addEventListener("click", copyRoomLink);
 canvas.addEventListener("click", handleCanvasClick);

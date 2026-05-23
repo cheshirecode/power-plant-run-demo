@@ -22,25 +22,30 @@
           </div>
 
           <div class="room-controls" aria-label="Room controls">
-            <button class="control-button" type="button" id="create-room-button">Create</button>
+            <button class="control-button" type="button" id="create-room-button">Create room</button>
             <select class="room-select" id="room-size-input" aria-label="Active player slots" title="Active player slots">
               <option value="1">1 player</option>
               <option value="2" selected>2 players</option>
               <option value="3">3 players</option>
               <option value="4">4 players</option>
             </select>
-            <input
-              class="room-input"
-              id="room-code-input"
-              type="text"
-              maxlength="40"
-              autocomplete="off"
-              placeholder="room name"
-              aria-label="Room name"
-              title="Room name, leave blank to auto-generate"
-            />
-            <button class="control-button" type="button" id="join-room-button">Join</button>
+            <label class="room-field">
+              <span>Room name/code</span>
+              <input
+                class="room-input"
+                id="room-code-input"
+                type="text"
+                maxlength="40"
+                autocomplete="off"
+                placeholder="blank = auto"
+                aria-label="Room name or code"
+                title="Create: optional room name. Join: existing room code."
+              />
+            </label>
+            <button class="control-button" type="button" id="join-room-button">Join room</button>
             <button class="control-button" type="button" id="ready-button" aria-pressed="false">Ready</button>
+            <button class="control-button" type="button" id="room-replay-button" aria-pressed="false">Replay</button>
+            <button class="control-button" type="button" id="end-room-button">End game</button>
             <button class="control-button" type="button" id="leave-room-button">Leave</button>
             <button class="control-button" type="button" id="copy-room-button">Copy</button>
             <span class="session-status" id="room-status">Solo</span>
@@ -76,6 +81,7 @@
           <div class="start-panel">
             <h2>Power Plant Run</h2>
             <button class="start-button" type="button" id="start-button">Start</button>
+            <div class="room-list" id="room-list" aria-live="polite"></div>
           </div>
         </div>
         <div class="room-sheet is-hidden" id="room-sheet">
