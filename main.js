@@ -3,9 +3,11 @@ import { buildLeaderboardRows } from "./client/leaderboard.js";
 import { buildRoomUrl, clearRoomUrl, getRoomIdFromUrl, normalizeRoomId, updateRoomUrl } from "./client/room-url.js";
 import {
   PLAYER_STATES,
+  NODE_STATES,
   SKILL_CONFIG,
   SKILL_IDS,
   canSkillClaimNode,
+  canPlayerClaimDuringStasis,
   findBestWarpNode,
   getBoostIntervalMs,
   getCaptureDurationMs,
@@ -13,6 +15,7 @@ import {
   getSkillCooldownRatio,
   isBoostActive,
   isHighValueNode,
+  isNodeInStasis,
   isPointInStasis,
   isStasisPulseActive,
 } from "./client/skill-mechanics.js";
@@ -729,7 +732,7 @@ function getDemoCountdownMsForElapsed(cycle, elapsed) {
 
 function getDemoNodeTimerDeltaMs(cycle, elapsed) {
   const probeLoop = { cycle, elapsed, rawElapsed: elapsed, detonationElapsed: DEMO_MAX_REPAIR_ELAPSED };
-  return getDemoNodeStates(probeLoop, Date.now(), null, getDemoVisibleNodes(cycle, elapsed), { ignoreEscape: true }).reduce(
+  return getDemoNodeStates(probeLoop, Date.now(), null, getDemoVisibleNodes(cycle, elapsed), { ignoreEscape: true, ignoreStasis: true }).reduce(
     (sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum),
     0,
   );
@@ -1262,6 +1265,7 @@ function getDemoRoom(loop, time) {
 function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes = getDemoVisibleNodes(loop.cycle, getDemoRepairElapsed(loop)), options = {}) {
   const repairElapsed = getDemoRepairElapsed(loop);
   const detonationElapsed = options.ignoreEscape ? DEMO_MAX_REPAIR_ELAPSED : getDemoDetonationElapsed(loop.cycle);
+  const stasisSources = options.ignoreStasis ? [] : getDemoStasisPulseSources(repairElapsed, loop.cycle);
   const actorRoutes = squad.map((member, index) => ({
     member,
     index,
@@ -1272,19 +1276,31 @@ function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes =
   const repairedNodeIds = new Set(actorRoutes.flatMap((entry) => entry.route.repairedNodeIds || []));
 
   return visibleNodes.map((node, index) => {
-    const claimant = activeActors.find((actor) => canSkillClaimNode(actor, node));
+    const stasisLocked = isNodeInStasis(node, stasisSources);
+    const claimant = activeActors.find((actor) => {
+      if (!canSkillClaimNode(actor, node)) return false;
+      return !stasisLocked || canPlayerClaimDuringStasis(actor);
+    });
     const routeClaimant = actorRoutes.find((entry) => entry.member.id === claimant?.member?.id || entry.member.id === claimant?.id);
     const nodeSpawnedAt = Math.max(0, (index - DEMO_INITIAL_NODE_COUNT) * DEMO_NODE_SPAWN_MS);
     const repaired = repairedNodeIds.has(node.id);
-    const holdRemainingMs = routeClaimant?.route.activeNode?.id === node.id ? routeClaimant.route.holdRemainingMs : 0;
+    const holdRemainingMs =
+      !stasisLocked || canPlayerClaimDuringStasis(claimant)
+        ? routeClaimant?.route.activeNode?.id === node.id
+          ? routeClaimant.route.holdRemainingMs
+          : 0
+        : 0;
     const holdDurationMs = routeClaimant?.route.holdDurationMs || node.holdMs;
+    const claimedBy = !repaired && holdRemainingMs > 0 && claimant ? claimant.member?.id || claimant.id : null;
     return {
       ...node,
       spawnedAt: nodeSpawnedAt,
       seed: node.x * 0.013 + node.y * 0.017 + loop.cycle,
       repaired,
-      claimedBy: !repaired && holdRemainingMs > 0 && claimant ? claimant.member?.id || claimant.id : null,
-      claimEndsAt: !repaired && holdRemainingMs > 0 && claimant ? now + holdRemainingMs : null,
+      state: repaired ? NODE_STATES.repaired : stasisLocked && !claimedBy ? NODE_STATES.stasis : claimedBy ? NODE_STATES.claimed : NODE_STATES.unclaimed,
+      stasisLocked,
+      claimedBy,
+      claimEndsAt: claimedBy ? now + holdRemainingMs : null,
       claimDurationMs: holdDurationMs,
       negative: node.value < 0,
     };
@@ -3619,6 +3635,9 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
       x: node.x,
       y: node.y,
       value: node.value,
+      state: node.state,
+      stasisLocked: Boolean(node.stasisLocked),
+      claimedBy: node.claimedBy || null,
       bonus: Boolean(node.bonus),
       negative: node.value < 0,
       distanceFromPlant: Math.hypot(node.x - DEMO_BLAST.x, node.y - DEMO_BLAST.y),

@@ -42,6 +42,11 @@ const PLAYER_CLAIM_HALF_WIDTH = 4;
 const PLAYER_CLAIM_HEIGHT = 11;
 const PLAYER_STATE_ALIVE = "alive";
 const PLAYER_STATE_INCAPACITATED = "incapacitated";
+const PLAYER_STATE_STASIS = "stasis";
+const NODE_STATE_UNCLAIMED = "unclaimed";
+const NODE_STATE_CLAIMED = "claimed";
+const NODE_STATE_REPAIRED = "repaired";
+const NODE_STATE_STASIS = "stasis";
 const START_NODES = [
   { id: "n1", x: 70, y: 348 },
   { id: "n2", x: 96, y: 172 },
@@ -413,10 +418,8 @@ export class GameRoom {
     for (const node of activeNodes) {
       if (!node.claimedBy || node.repaired) continue;
       const claimant = this.roomState.players[node.claimedBy];
-      if (!claimant || !isInsideNode(claimant, node)) {
-        delete node.claimedBy;
-        delete node.claimedAt;
-        delete node.claimEndsAt;
+      if (!canPlayerClaimNode(claimant) || !isInsideNode(claimant, node) || node.state === NODE_STATE_STASIS) {
+        clearNodeClaim(node);
         continue;
       }
       if (now >= node.claimEndsAt) {
@@ -426,7 +429,7 @@ export class GameRoom {
 
     if (!playerId) return;
     const player = this.roomState.players[playerId];
-    if (!player) return;
+    if (!canPlayerClaimNode(player)) return;
     if (activeNodes.some((node) => node.claimedBy === playerId && !node.repaired)) return;
 
     const node = activeNodes
@@ -437,16 +440,16 @@ export class GameRoom {
     node.claimedBy = playerId;
     node.claimedAt = now;
     node.claimEndsAt = now + node.holdMs;
+    node.state = NODE_STATE_CLAIMED;
     await this.scheduleNextRepairAlarm();
   }
 
   async repairNode(node, player) {
     node.repaired = true;
+    node.state = NODE_STATE_REPAIRED;
     node.repairedBy = player.id;
     node.repairedAt = Date.now();
-    delete node.claimedBy;
-    delete node.claimedAt;
-    delete node.claimEndsAt;
+    clearNodeClaim(node, NODE_STATE_REPAIRED);
     const scoreValue = Math.abs(node.value);
     player.roundScore = roundValue((player.roundScore || 0) + scoreValue);
     this.roomState.score = roundValue(this.roomState.score + scoreValue);
@@ -770,6 +773,7 @@ function cloneNodes() {
     return {
       ...node,
       repaired: false,
+      state: NODE_STATE_UNCLAIMED,
       spawnedAt: nodeSpawnedAt(index),
       bonus,
       negative: value < 0,
@@ -850,6 +854,19 @@ function isInsideNode(player, node) {
   return playerRight >= nodeLeft && playerLeft <= nodeRight && playerBottom >= nodeTop && playerTop <= nodeBottom;
 }
 
+function canPlayerClaimNode(player) {
+  return Boolean(player && !player.spectator && player.state !== PLAYER_STATE_INCAPACITATED && player.state !== PLAYER_STATE_STASIS);
+}
+
+function clearNodeClaim(node, nextState = NODE_STATE_UNCLAIMED) {
+  delete node.claimedBy;
+  delete node.claimedAt;
+  delete node.claimEndsAt;
+  if (!node.repaired) {
+    node.state = nextState;
+  }
+}
+
 function distanceToNode(player, node) {
   return Math.hypot(player.x - node.x, player.y - node.y);
 }
@@ -865,7 +882,22 @@ export const __ROOM_MECHANICS_DEBUG__ = {
   initialNodeCount: NODE_INITIAL_COUNT,
   nodeRespawnMs: NODE_RESPAWN_MS,
   isNodeSpawned,
+  canPlayerClaimNode,
+  clearNodeClaim,
   regularNodeValue,
+  states: {
+    player: {
+      alive: PLAYER_STATE_ALIVE,
+      incapacitated: PLAYER_STATE_INCAPACITATED,
+      stasis: PLAYER_STATE_STASIS,
+    },
+    node: {
+      unclaimed: NODE_STATE_UNCLAIMED,
+      claimed: NODE_STATE_CLAIMED,
+      repaired: NODE_STATE_REPAIRED,
+      stasis: NODE_STATE_STASIS,
+    },
+  },
 };
 
 function makeBlast() {

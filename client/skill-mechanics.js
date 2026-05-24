@@ -4,6 +4,13 @@ export const PLAYER_STATES = {
   stasis: "stasis",
 };
 
+export const NODE_STATES = {
+  unclaimed: "unclaimed",
+  claimed: "claimed",
+  repaired: "repaired",
+  stasis: "stasis",
+};
+
 export const SKILL_IDS = {
   boost: "boost",
   magnet: "magnet",
@@ -118,6 +125,14 @@ export function isStasisPulseActive(elapsed, config = SKILL_CONFIG) {
 
 export function isPointInStasis(point, sources, config = SKILL_CONFIG) {
   return sources.some((source) => distance(point, source) <= config.stasis.radius);
+}
+
+export function isNodeInStasis(node, sources, config = SKILL_CONFIG) {
+  return isPointInStasis(node, sources, config);
+}
+
+export function canPlayerClaimDuringStasis(actor) {
+  return actor?.ability?.id === SKILL_IDS.stasis;
 }
 
 export function canSkillClaimNode(actor, node, config = SKILL_CONFIG) {

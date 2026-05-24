@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { SKILL_CONFIG } from "../client/skill-mechanics.js";
+import { NODE_STATES, PLAYER_STATES, SKILL_CONFIG, SKILL_IDS } from "../client/skill-mechanics.js";
 
 installBrowserStubs();
 
@@ -9,6 +9,10 @@ const { __ROOM_MECHANICS_DEBUG__: roomMechanics } = await import(`../src/worker.
 
 const debug = globalThis.window.__POWER_PLANT_DEMO_DEBUG__;
 assert(debug, "demo debug API was not registered");
+assert(!roomMechanics.canPlayerClaimNode({ state: roomMechanics.states.player.stasis }), "stasis room player could claim a node");
+const claimResetNode = { claimedBy: "p1", claimedAt: 10, claimEndsAt: 20, repaired: false, state: roomMechanics.states.node.claimed };
+roomMechanics.clearNodeClaim(claimResetNode);
+assert(!claimResetNode.claimedBy && !claimResetNode.claimEndsAt && claimResetNode.state === roomMechanics.states.node.unclaimed, "room node claim reset did not clear state");
 
 const timings = debug.timings;
 assert(timings.vortexStart - timings.rebuildStart >= 4_000, "rebuild window is too short to see");
@@ -22,6 +26,7 @@ assert(!demoOnlyIds.has("blink"), "old blink ability is still registered");
 
 const workerSource = readFileSync("src/worker.js", "utf8");
 for (const id of demoOnlyIds) {
+  if (id === SKILL_IDS.stasis) continue;
   assert(!workerSource.includes(`"${id}"`) && !workerSource.includes(`'${id}'`), `${id} leaked into server gameplay`);
 }
 
@@ -50,6 +55,20 @@ assert(
 );
 assert(repairSamples.every((sample) => sample.players.every((player) => player.roundScore >= 0)), "negative nodes reduced a demo player score");
 assert(repairSamples.some((sample) => sample.frozenCount > 0), "stasis never froze a demo player");
+assert(
+  repairSamples.some((sample) => sample.nodes.some((node) => node.state === NODE_STATES.stasis && node.stasisLocked && !node.claimedBy)),
+  "stasis never locked an unclaimed node",
+);
+assert(
+  repairSamples.every((sample) =>
+    sample.nodes.every((node) => {
+      if (!node.stasisLocked || !node.claimedBy) return true;
+      const claimant = sample.players.find((player) => player.id === node.claimedBy);
+      return claimant?.ability === SKILL_IDS.stasis && claimant.state !== PLAYER_STATES.stasis;
+    }),
+  ),
+  "stasis allowed a non-stasis player to keep claiming a locked node",
+);
 const boostBurst = debug.getSnapshotAt(500, 500).players.filter((player) => player.ability === "boost");
 const boostCooldown = debug.getSnapshotAt(1_500, 1_500).players.filter((player) => player.ability === "boost");
 assert(boostBurst.some((player) => player.boostActive), "boost was not active during its 1s burst");
