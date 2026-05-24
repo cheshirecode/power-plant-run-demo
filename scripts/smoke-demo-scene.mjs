@@ -254,12 +254,14 @@ function assertNodeValueRules(nodes, redExclusionRadius, label) {
     assert(!(node.value < 0 && distance <= redExclusionRadius), `${label}: red node ${node.id} spawned in plant grid`);
   }
 
-  for (const closer of positives) {
-    const closerDistance = closer.distanceFromPlant ?? Math.hypot(closer.x - roomMechanics.center.x, closer.y - roomMechanics.center.y);
-    for (const farther of positives) {
-      const fartherDistance = farther.distanceFromPlant ?? Math.hypot(farther.x - roomMechanics.center.x, farther.y - roomMechanics.center.y);
-      if (closerDistance + 16 < fartherDistance) {
-        assert(closer.value >= farther.value, `${label}: green node ${closer.id} is closer but lower value than ${farther.id}`);
+  for (const hotter of positives) {
+    const hotterHeat = hotter.plantHeat ?? 0;
+    for (const cooler of positives) {
+      const coolerHeat = cooler.plantHeat ?? 0;
+      if (hotterHeat > coolerHeat + 0.12) {
+        const hotterBaseValue = Math.abs(hotter.value) - (hotter.valuePulseCount || 0);
+        const coolerBaseValue = Math.abs(cooler.value) - (cooler.valuePulseCount || 0);
+        assert(hotterBaseValue >= coolerBaseValue, `${label}: green node ${hotter.id} has more plant heat but lower base value than ${cooler.id}`);
       }
     }
   }

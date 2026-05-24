@@ -256,6 +256,21 @@ h1 {
   background: color-mix(in srgb, var(--panel-strong) 58%, #000);
 }
 
+.legend-config-toggle {
+  width: 100%;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--panel-strong) 76%, #000);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  padding: 8px;
+  text-align: left;
+}
+
+.legend-config-toggle[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 28%, var(--panel));
+}
+
 .legend-copy {
   color: var(--muted);
   font-size: 0.55rem;

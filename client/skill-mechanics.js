@@ -106,6 +106,11 @@ export function getCaptureDurationMs(node, skillId, config = SKILL_CONFIG) {
 }
 
 export function getNodeScoreValue(node, skillId, config = SKILL_CONFIG) {
+  return Math.abs(getEffectiveNodeValue(node, skillId, config));
+}
+
+export function getEffectiveNodeValue(node, skillId, config = SKILL_CONFIG) {
+  const rawValue = Number(node?.value || 0);
   let multiplier = 1;
   if (skillId === SKILL_IDS.greed) {
     multiplier = isHighValueNode(node, config) ? config.greed.highValueScoreMultiplier : config.greed.lowValueScoreMultiplier;
@@ -116,7 +121,7 @@ export function getNodeScoreValue(node, skillId, config = SKILL_CONFIG) {
   } else if (skillId === SKILL_IDS.warp) {
     multiplier = config.warp.scoreMultiplier;
   }
-  return Math.abs(node?.value || 0) * multiplier;
+  return rawValue * multiplier;
 }
 
 export function isStasisPulseActive(elapsed, config = SKILL_CONFIG) {

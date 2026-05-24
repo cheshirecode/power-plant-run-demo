@@ -1,3 +1,5 @@
+import { getEffectiveNodeValue, getNodeScoreValue } from "../client/skill-mechanics.js";
+
 const ROOM_ID_PATTERN = /^[a-z0-9-]{3,40}$/;
 const PLAYER_ID_PATTERN = /^[a-zA-Z0-9_-]{1,40}$/;
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
@@ -29,6 +31,7 @@ const NODE_VALUE_DECIMALS = 2;
 const WORLD_WIDTH = 768;
 const WORLD_HEIGHT = 432;
 const BLAST_CENTER = { x: WORLD_WIDTH / 2, y: WORLD_HEIGHT / 2 };
+const DEFAULT_PLANT_COUNT = 2;
 const BLAST_RADIUS_BASE = 115;
 const BLAST_RADIUS_JITTER = 13;
 const NODE_RED_EXCLUSION_RADIUS = BLAST_RADIUS_BASE + BLAST_RADIUS_JITTER;
@@ -94,6 +97,7 @@ export class GameRoom {
     this.env = env;
     this.sessions = new Map();
     this.loaded = false;
+    const plants = makePlants(DEFAULT_PLANT_COUNT);
     this.roomState = {
       phase: "lobby",
       cycle: 0,
@@ -102,10 +106,12 @@ export class GameRoom {
       startedAt: null,
       phaseStartedAt: null,
       countdownEndsAt: null,
-      blast: null,
+      plants,
+      blasts: plants.map((plant) => plant.blast),
+      blast: plants[0]?.blast || null,
       summary: null,
       players: {},
-      nodes: cloneNodes(),
+      nodes: cloneNodes(plants),
       score: 0,
       ownerId: null,
       replayVotes: {},
@@ -213,11 +219,15 @@ export class GameRoom {
     if (this.loaded) return;
     const stored = await this.state.storage.get("roomState");
     if (stored) {
+      const storedPlants = normalizePlants(stored.plants, stored.blasts || (stored.blast ? [stored.blast] : null));
       this.roomState = {
         ...this.roomState,
         ...stored,
+        plants: storedPlants,
+        blasts: storedPlants.map((plant) => plant.blast),
+        blast: storedPlants[0]?.blast || stored.blast || null,
         players: stored.players || {},
-        nodes: stored.nodes || cloneNodes(),
+        nodes: stored.nodes || cloneNodes(storedPlants),
       };
     }
     this.loaded = true;
@@ -374,7 +384,10 @@ export class GameRoom {
     const players = Object.values(this.roomState.players).filter((player) => !player.spectator);
     this.roomState.cycle += 1;
     this.roomState.startedAt = Date.now();
-    this.roomState.nodes = cloneNodes();
+    this.roomState.plants = makePlants(DEFAULT_PLANT_COUNT);
+    this.roomState.blasts = this.roomState.plants.map((plant) => plant.blast);
+    this.roomState.blast = this.roomState.blasts[0] || null;
+    this.roomState.nodes = cloneNodes(this.roomState.plants);
     this.roomState.score = 0;
     this.roomState.summary = null;
     this.roomState.blast = makeBlast();
@@ -382,7 +395,7 @@ export class GameRoom {
     this.roomState.closed = false;
     this.roomState.roundBanked = false;
     this.roomState.countdownEndsAt = Date.now() + ROUND_COUNTDOWN_MS;
-    const spawns = safePlayerSpawns(this.roomState.blast, players.length);
+    const spawns = safePlayerSpawns(this.roomState.blasts, players.length);
     for (const player of players) {
       if (resetScores) {
         player.score = 0;
@@ -450,10 +463,12 @@ export class GameRoom {
     node.repairedBy = player.id;
     node.repairedAt = Date.now();
     clearNodeClaim(node, NODE_STATE_REPAIRED);
-    const scoreValue = Math.abs(node.value);
+    const abilityId = player.ability?.id;
+    const scoreValue = getNodeScoreValue(node, abilityId);
+    const timerValue = getEffectiveNodeValue(node, abilityId);
     player.roundScore = roundValue((player.roundScore || 0) + scoreValue);
     this.roomState.score = roundValue(this.roomState.score + scoreValue);
-    this.roomState.countdownEndsAt += Math.round(node.value * 1500);
+    this.roomState.countdownEndsAt += Math.round(timerValue * 1500);
     if (this.roomState.countdownEndsAt < Date.now()) {
       this.roomState.countdownEndsAt = Date.now();
     }
@@ -511,7 +526,28 @@ export class GameRoom {
   }
 
   activeNodes(now = Date.now()) {
+    this.applyNodeValuePulses(now);
     return this.roomState.nodes.filter((node) => isNodeSpawned(node, this.roomState.phaseStartedAt, now));
+  }
+
+  applyNodeValuePulses(now = Date.now()) {
+    if (this.roomState.phase !== "repair" || !this.roomState.phaseStartedAt) return;
+    const pulse = Math.floor(Math.max(0, now - this.roomState.phaseStartedAt) / NODE_RESPAWN_MS);
+    for (const node of this.roomState.nodes) {
+      if (node.repaired || !isNodeSpawned(node, this.roomState.phaseStartedAt, now)) continue;
+      const nodeWave = nodeSpawnWave(node);
+      const targetPulseCount = Math.max(0, pulse - nodeWave);
+      const delta = targetPulseCount - (node.valuePulseCount || 0);
+      if (delta <= 0) continue;
+      const sign = node.value < 0 ? -1 : 1;
+      node.value = roundValue((Math.abs(node.value) + delta) * sign);
+      const priorHoldMs = node.holdMs || nodeHoldMs(node.value);
+      node.holdMs = nodeHoldMs(node.value);
+      node.valuePulseCount = targetPulseCount;
+      if (node.claimedBy && node.claimEndsAt) {
+        node.claimEndsAt += Math.max(0, node.holdMs - priorHoldMs);
+      }
+    }
   }
 
   nextNodeSpawnAt(now = Date.now()) {
@@ -556,11 +592,11 @@ export class GameRoom {
 
     if (remainingMs <= BOT_ESCAPE_THRESHOLD_MS) {
       delete bot.botTargetNodeId;
-      return safePlayerSpawns(this.roomState.blast || makeBlast(), 1)[0] || { x: 34, y: 184 };
+      return safePlayerSpawns(this.roomState.blasts || [this.roomState.blast || makeBlast()], 1)[0] || { x: 34, y: 184 };
     }
 
     const candidates = activeNodes.filter((node) => !node.repaired && !node.claimedBy);
-    if (candidates.length === 0) return safePlayerSpawns(this.roomState.blast || makeBlast(), 1)[0] || null;
+    if (candidates.length === 0) return safePlayerSpawns(this.roomState.blasts || [this.roomState.blast || makeBlast()], 1)[0] || null;
 
     const wantsSafety = remainingMs <= BOT_POSITIVE_THRESHOLD_MS;
     const target = candidates
@@ -580,9 +616,9 @@ export class GameRoom {
   }
 
   applyBlast() {
-    const blast = this.roomState.blast || makeBlast();
+    const blasts = this.roomState.blasts?.length ? this.roomState.blasts : [this.roomState.blast || makeBlast()];
     for (const player of Object.values(this.roomState.players)) {
-      const caught = Math.hypot(player.x - blast.x, player.y - blast.y) <= blast.radius;
+      const caught = blasts.some((blast) => Math.hypot(player.x - blast.x, player.y - blast.y) <= blast.radius);
       player.caughtInBlast = caught;
       if (caught) {
         player.roundScore = 0;
@@ -764,12 +800,14 @@ export class AdminConfig {
   }
 }
 
-function cloneNodes() {
+function cloneNodes(plants = normalizePlants()) {
   assertNodeSpacing(START_NODES);
   const bonusNodeIds = chooseBonusNodeIds();
   return START_NODES.map((node, index) => {
     const bonus = bonusNodeIds.has(node.id);
-    const value = nodeValue(node, bonus);
+    const distanceFromPlant = nearestPlantDistance(node, plants);
+    const plantHeat = plantInfluenceHeat(node, plants);
+    const value = nodeValue(node, bonus, plants);
     return {
       ...node,
       repaired: false,
@@ -778,6 +816,8 @@ function cloneNodes() {
       bonus,
       negative: value < 0,
       value,
+      distanceFromPlant,
+      plantHeat,
       size: nodeSize(value, bonus),
       holdMs: nodeHoldMs(value),
       seed: Math.random() + index,
@@ -788,6 +828,10 @@ function cloneNodes() {
 function nodeSpawnedAt(index) {
   if (index < NODE_INITIAL_COUNT) return 0;
   return (index - NODE_INITIAL_COUNT + 1) * NODE_RESPAWN_MS;
+}
+
+function nodeSpawnWave(node) {
+  return Math.max(0, Math.round((node.spawnedAt || 0) / NODE_RESPAWN_MS));
 }
 
 function chooseBonusNodeIds() {
@@ -806,23 +850,36 @@ function assertNodeSpacing(nodes) {
   }
 }
 
-function nodeValue(node, bonus = false) {
-  const sign = canNodeBeNegative(node) && Math.random() < NODE_NEGATIVE_CHANCE ? -1 : 1;
-  const magnitude = bonus
-    ? NODE_BONUS_VALUE_MIN + Math.random() * (NODE_BONUS_VALUE_MAX - NODE_BONUS_VALUE_MIN)
-    : regularNodeValue(node);
-  return roundValue(magnitude * sign);
+function nodeValue(node, bonus = false, plants = normalizePlants()) {
+  const sign = canNodeBeNegative(node, plants) && Math.random() < NODE_NEGATIVE_CHANCE ? -1 : 1;
+  const magnitude = genericNodeMagnitude(node, bonus, plants);
+  return roundValue(Math.round(magnitude) * sign);
 }
 
-function canNodeBeNegative(node) {
-  return Math.hypot(node.x - BLAST_CENTER.x, node.y - BLAST_CENTER.y) > NODE_RED_EXCLUSION_RADIUS;
+function canNodeBeNegative(node, plants = normalizePlants()) {
+  return nearestPlantDistance(node, plants) > NODE_RED_EXCLUSION_RADIUS;
 }
 
-function regularNodeValue(node) {
-  const distance = Math.hypot(node.x - BLAST_CENTER.x, node.y - BLAST_CENTER.y);
-  const falloff = (distance - NODE_MAX_VALUE_DISTANCE) / (NODE_MIN_VALUE_DISTANCE - NODE_MAX_VALUE_DISTANCE);
-  const closeness = 1 - clampNumber(falloff, 0, 1);
-  return clampNumber(NODE_VALUE_MIN + closeness * (NODE_VALUE_MAX - NODE_VALUE_MIN), NODE_VALUE_MIN, NODE_VALUE_MAX);
+function genericNodeMagnitude(node, bonus = false, plants = normalizePlants()) {
+  const normalizedPlants = normalizePlants(plants);
+  const heat = plantInfluenceHeat(node, normalizedPlants);
+  const baseMax = NODE_VALUE_MAX + Math.max(0, normalizedPlants.length - 1) * 2.5;
+  const base = clampNumber(NODE_VALUE_MIN + heat * (NODE_VALUE_MAX - NODE_VALUE_MIN) * 0.78, NODE_VALUE_MIN, baseMax);
+  if (!bonus) return base;
+  return clampNumber(base * 1.45 + 1, NODE_BONUS_VALUE_MIN, NODE_BONUS_VALUE_MAX + Math.max(0, normalizedPlants.length - 1) * 2);
+}
+
+function regularNodeValue(node, plants = normalizePlants()) {
+  return genericNodeMagnitude(node, false, plants);
+}
+
+function plantInfluenceHeat(node, plants = normalizePlants()) {
+  return normalizePlants(plants).reduce((sum, plant) => {
+    const distance = Math.hypot(node.x - plant.x, node.y - plant.y);
+    const falloff = (distance - NODE_MAX_VALUE_DISTANCE) / (NODE_MIN_VALUE_DISTANCE - NODE_MAX_VALUE_DISTANCE);
+    const closeness = 1 - clampNumber(falloff, 0, 1);
+    return sum + Math.pow(closeness, 1.45);
+  }, 0);
 }
 
 function nodeSize(value, bonus = false) {
@@ -878,12 +935,18 @@ function roundValue(value) {
 export const __ROOM_MECHANICS_DEBUG__ = {
   cloneNodes,
   center: BLAST_CENTER,
+  plantCount: DEFAULT_PLANT_COUNT,
+  makePlants,
+  nearestPlantDistance,
+  plantInfluenceHeat,
   redExclusionRadius: NODE_RED_EXCLUSION_RADIUS,
   initialNodeCount: NODE_INITIAL_COUNT,
   nodeRespawnMs: NODE_RESPAWN_MS,
   isNodeSpawned,
+  nodeSpawnWave,
   canPlayerClaimNode,
   clearNodeClaim,
+  genericNodeMagnitude,
   regularNodeValue,
   states: {
     player: {
@@ -901,16 +964,86 @@ export const __ROOM_MECHANICS_DEBUG__ = {
 };
 
 function makeBlast() {
+  const radius = BLAST_RADIUS_BASE + Math.round((Math.random() * 2 - 1) * BLAST_RADIUS_JITTER);
   return {
     x: BLAST_CENTER.x,
     y: BLAST_CENTER.y,
-    radius: BLAST_RADIUS_BASE + Math.round((Math.random() * 2 - 1) * BLAST_RADIUS_JITTER),
+    radius,
   };
 }
 
-function safePlayerSpawns(blast, count) {
-  const safeDistance = blast.radius + 12;
-  const safe = shuffle(PLAYER_SPAWNS).filter((spawn) => Math.hypot(spawn.x - blast.x, spawn.y - blast.y) > safeDistance);
+function makePlants(count = DEFAULT_PLANT_COUNT) {
+  const plants = [];
+  let attempts = 0;
+  while (plants.length < count && attempts < 200) {
+    attempts += 1;
+    const radius = BLAST_RADIUS_BASE + Math.round((Math.random() * 2 - 1) * BLAST_RADIUS_JITTER);
+    const margin = radius + 8;
+    const x = margin + Math.random() * Math.max(1, WORLD_WIDTH - margin * 2);
+    const y = margin + Math.random() * Math.max(1, WORLD_HEIGHT - margin * 2);
+    if (plants.some((plant) => Math.hypot(plant.x - x, plant.y - y) < Math.max(150, radius + plant.blast.radius * 0.72))) {
+      continue;
+    }
+    plants.push({
+      id: `plant-${plants.length + 1}`,
+      x: Math.round(x),
+      y: Math.round(y),
+      blast: { x: Math.round(x), y: Math.round(y), radius },
+    });
+  }
+  while (plants.length < count) {
+    const fallback = fallbackPlant(plants.length);
+    plants.push(fallback);
+  }
+  return plants;
+}
+
+function fallbackPlant(index) {
+  const radius = BLAST_RADIUS_BASE;
+  const slots = [
+    { x: WORLD_WIDTH * 0.34, y: WORLD_HEIGHT * 0.48 },
+    { x: WORLD_WIDTH * 0.66, y: WORLD_HEIGHT * 0.52 },
+    { x: WORLD_WIDTH * 0.5, y: WORLD_HEIGHT * 0.33 },
+    { x: WORLD_WIDTH * 0.5, y: WORLD_HEIGHT * 0.67 },
+  ];
+  const slot = slots[index % slots.length];
+  const x = Math.round(clampNumber(slot.x, radius, WORLD_WIDTH - radius));
+  const y = Math.round(clampNumber(slot.y, radius, WORLD_HEIGHT - radius));
+  return { id: `plant-${index + 1}`, x, y, blast: { x, y, radius } };
+}
+
+function normalizePlants(plants = null, blasts = null) {
+  const sourcePlants = Array.isArray(plants) && plants.length > 0 ? plants : null;
+  if (sourcePlants) {
+    return sourcePlants.map((plant, index) => normalizePlant(plant, index));
+  }
+  if (Array.isArray(blasts) && blasts.length > 0) {
+    return blasts.map((blast, index) => normalizePlant({ id: `plant-${index + 1}`, x: blast.x, y: blast.y, blast }, index));
+  }
+  return [normalizePlant({ id: "plant-1", x: BLAST_CENTER.x, y: BLAST_CENTER.y, blast: makeBlast() }, 0)];
+}
+
+function normalizePlant(plant, index) {
+  const radius = clampNumber(Math.round(plant?.blast?.radius || plant?.radius || BLAST_RADIUS_BASE), 16, Math.min(WORLD_WIDTH, WORLD_HEIGHT) / 2);
+  const x = Math.round(clampNumber(plant?.x ?? plant?.blast?.x ?? BLAST_CENTER.x, radius, WORLD_WIDTH - radius));
+  const y = Math.round(clampNumber(plant?.y ?? plant?.blast?.y ?? BLAST_CENTER.y, radius, WORLD_HEIGHT - radius));
+  return {
+    id: plant?.id || `plant-${index + 1}`,
+    x,
+    y,
+    blast: { x, y, radius },
+  };
+}
+
+function nearestPlantDistance(point, plants = normalizePlants()) {
+  return normalizePlants(plants).reduce((nearest, plant) => Math.min(nearest, Math.hypot(point.x - plant.x, point.y - plant.y)), Number.POSITIVE_INFINITY);
+}
+
+function safePlayerSpawns(blasts, count) {
+  const blastList = Array.isArray(blasts) ? blasts.filter(Boolean) : [blasts].filter(Boolean);
+  const safe = shuffle(PLAYER_SPAWNS).filter((spawn) =>
+    blastList.every((blast) => Math.hypot(spawn.x - blast.x, spawn.y - blast.y) > blast.radius + 12),
+  );
   if (safe.length >= count) return safe;
   return [...safe, ...shuffle(PLAYER_SPAWNS).filter((spawn) => !safe.includes(spawn))];
 }

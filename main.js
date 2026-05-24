@@ -12,6 +12,7 @@ import {
   findBestWarpNode,
   getBoostIntervalMs,
   getCaptureDurationMs,
+  getEffectiveNodeValue,
   getNodeScoreValue,
   getSkillCooldownRatio,
   isBoostActive,
@@ -50,6 +51,7 @@ const styleButtons = [...document.querySelectorAll(".style-button")];
 const themeMenu = document.querySelector("#theme-menu");
 const themeSummarySwatch = document.querySelector("#theme-summary-swatch");
 const themeSummaryLabel = document.querySelector("#theme-summary-label");
+const skillConfigToggle = document.querySelector("#skill-config-toggle");
 
 const VIEW = {
   width: canvas.width,
@@ -230,6 +232,7 @@ const DEMO_NODE_TIMER_FACTOR_MS = 900;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_RED_EXCLUSION_RADIUS = DEMO_BLAST.radius + 13;
+const DEMO_PLANT_COUNT = 2;
 const DEMO_SUMMARY_START = EXPLOSION_START + 450;
 const DEMO_VORTEX_START = LOOP_DURATION - 900;
 const DEMO_PATH_POINTS = [
@@ -267,7 +270,8 @@ const baseDemoNodes = [
   { id: "dn23", x: 224, y: 168, value: 6.7, size: 10, holdMs: 3100, bonus: true },
   { id: "dn24", x: 632, y: 380, value: 5.9, size: 9, holdMs: 2600 },
 ];
-const demoNodes = buildDemoNodePool(96).map(normalizeDemoNode);
+const demoNodePool = buildDemoNodePool(128);
+const demoNodesByCycle = new Map();
 const demoAbilities = [
   { id: "boost", label: "BOOST", name: "Overclock Boots", hint: "2x burst", color: "#70a8ff", accent: "#f1e8cf" },
   { id: "magnet", label: "MAG", name: "Magnet Gloves", hint: "claim farther", color: "#57d56c", accent: "#d7ffd8" },
@@ -337,6 +341,7 @@ const squad = [
 ];
 
 let activeStyle = "steampunk";
+let showSkillConfig = false;
 let startedAt = performance.now();
 let lastStatus = "";
 let gameStarted = false;
@@ -734,7 +739,12 @@ function getDemoCountdownMsForElapsed(cycle, elapsed) {
 function getDemoNodeTimerDeltaMs(cycle, elapsed) {
   const probeLoop = { cycle, elapsed, rawElapsed: elapsed, detonationElapsed: DEMO_MAX_REPAIR_ELAPSED };
   return getDemoNodeStates(probeLoop, Date.now(), null, getDemoVisibleNodes(cycle, elapsed), { ignoreEscape: true, ignoreStasis: true }).reduce(
-    (sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum),
+    (sum, node) => {
+      if (!node.repaired) return sum;
+      const owner = squad.find((member) => member.id === node.repairedBy);
+      const ability = owner ? getDemoAbility(owner, cycle) : null;
+      return sum + getEffectiveNodeValue(node, ability?.id) * DEMO_NODE_TIMER_FACTOR_MS;
+    },
     0,
   );
 }
@@ -783,23 +793,79 @@ function getDemoAbility(member, cycle) {
   return demoAbilities[Math.min(demoAbilities.length - 1, index)];
 }
 
-function normalizeDemoNode(node) {
-  const distance = Math.hypot(node.x - DEMO_BLAST.x, node.y - DEMO_BLAST.y);
+function getDemoPlants(cycle = 0) {
+  const plants = [];
+  for (let i = 0; i < DEMO_PLANT_COUNT; i += 1) {
+    const radius = DEMO_BLAST.radius + Math.round((hash2d(cycle + 19, i + 7, 3) * 2 - 1) * 12);
+    const margin = radius + 10;
+    let x = margin + hash2d(cycle + 31, i + 11, 5) * (VIEW.width - margin * 2);
+    let y = margin + hash2d(cycle + 43, i + 17, 7) * (VIEW.height - margin * 2);
+    if (i > 0) {
+      const previous = plants[i - 1];
+      if (Math.hypot(previous.x - x, previous.y - y) < 170) {
+        x = VIEW.width - x;
+        y = VIEW.height - y;
+      }
+    }
+    x = Math.round(clamp(x, margin, VIEW.width - margin));
+    y = Math.round(clamp(y, margin, VIEW.height - margin));
+    plants.push({ id: `demo-plant-${i + 1}`, x, y, blast: { x, y, radius } });
+  }
+  return plants;
+}
+
+function getDemoBlasts(cycle = 0) {
+  return getDemoPlants(cycle).map((plant) => plant.blast);
+}
+
+function distanceToNearestDemoPlant(point, cycleOrPlants = 0) {
+  const plants = Array.isArray(cycleOrPlants) ? cycleOrPlants : getDemoPlants(cycleOrPlants);
+  return plants.reduce((nearest, plant) => Math.min(nearest, Math.hypot(point.x - plant.x, point.y - plant.y)), Number.POSITIVE_INFINITY);
+}
+
+function getDemoNodes(cycle = 0) {
+  if (!demoNodesByCycle.has(cycle)) {
+    const plants = getDemoPlants(cycle);
+    demoNodesByCycle.set(
+      cycle,
+      demoNodePool.map((node) => normalizeDemoNode(node, plants)),
+    );
+  }
+  return demoNodesByCycle.get(cycle);
+}
+
+function normalizeDemoNode(node, plants = getDemoPlants(0)) {
+  const distance = distanceToNearestDemoPlant(node, plants);
+  const plantHeat = demoNodeHeat(node, plants);
   let value = node.value;
   if (value < 0 && distance <= DEMO_RED_EXCLUSION_RADIUS) {
     value = Math.abs(value);
   }
-  if (value > 0) {
-    const falloff = (distance - 60) / 300;
-    const closeness = 1 - clamp(falloff, 0, 1);
-    const min = node.bonus ? 6.2 : 2.1;
-    const max = node.bonus ? 8.8 : 6.2;
-    value = min + closeness * (max - min);
-  }
+  const magnitude = demoNodeMagnitude(node, plants);
+  value = magnitude * (value < 0 ? -1 : 1);
   return {
     ...node,
     value: Number(value.toFixed(2)),
+    holdMs: Math.round(Math.abs(value) * 470 + 650),
+    distanceFromPlant: Number(distance.toFixed(2)),
+    plantHeat: Number(plantHeat.toFixed(4)),
   };
+}
+
+function demoNodeMagnitude(node, plants = getDemoPlants(0)) {
+  const heat = demoNodeHeat(node, plants);
+  const min = node.bonus ? 7 : 2;
+  const max = node.bonus ? 10 : 6 + Math.max(0, plants.length - 1) * 2.5;
+  return Math.max(1, Math.round(clamp(min + heat * 3.6, min, max)));
+}
+
+function demoNodeHeat(node, plants = getDemoPlants(0)) {
+  return plants.reduce((sum, plant) => {
+    const distance = Math.hypot(node.x - plant.x, node.y - plant.y);
+    const falloff = (distance - 60) / 300;
+    const closeness = 1 - clamp(falloff, 0, 1);
+    return sum + Math.pow(closeness, 1.45);
+  }, 0);
 }
 
 function buildDemoNodePool(count) {
@@ -809,11 +875,9 @@ function buildDemoNodePool(count) {
     const x = 42 + Math.floor(hash2d(candidate + 9, 3, 19) * (VIEW.width - 84));
     const y = 38 + Math.floor(hash2d(candidate + 13, 17, 5) * (VIEW.height - 76));
     candidate += 1;
-    if (Math.hypot(x - DEMO_BLAST.x, y - DEMO_BLAST.y) < 42) continue;
     if (nodes.some((node) => Math.hypot(node.x - x, node.y - y) < 28)) continue;
-    const distance = Math.hypot(x - DEMO_BLAST.x, y - DEMO_BLAST.y);
     const bonus = hash2d(x, y, candidate) > 0.82;
-    const negative = distance > DEMO_RED_EXCLUSION_RADIUS && hash2d(x, y, candidate + 41) < 0.58;
+    const negative = hash2d(x, y, candidate + 41) < 0.58;
     const baseValue = 2.1 + hash2d(x, y, candidate + 7) * 5.4;
     const value = Number((baseValue * (negative ? -1 : 1)).toFixed(2));
     nodes.push({
@@ -830,6 +894,7 @@ function buildDemoNodePool(count) {
 }
 
 function getDemoVisibleNodes(cycle, elapsed) {
+  const demoNodes = getDemoNodes(cycle);
   const spawnedPerWave = Math.ceil(squad.length * DEMO_NODE_SPAWN_PER_PLAYER_MULTIPLIER);
   const spawnedCount = Math.min(
     demoNodes.length,
@@ -843,6 +908,25 @@ function getDemoVisibleNodes(cycle, elapsed) {
     );
   }
   return demoVisibleNodeCache.get(cacheKey);
+}
+
+function applyDemoNodePulse(node, index, repairElapsed) {
+  const nodeSpawnedAt = Math.max(0, (index - DEMO_INITIAL_NODE_COUNT) * DEMO_NODE_SPAWN_MS);
+  const pulse = Math.floor(Math.max(0, repairElapsed) / DEMO_NODE_SPAWN_MS);
+  const nodeWave = Math.max(0, Math.round(nodeSpawnedAt / DEMO_NODE_SPAWN_MS));
+  const pulseCount = Math.max(0, pulse - nodeWave);
+  if (pulseCount <= 0) {
+    return { ...node, spawnedAt: nodeSpawnedAt, valuePulseCount: 0 };
+  }
+  const sign = node.value < 0 ? -1 : 1;
+  const value = Number(((Math.abs(node.value) + pulseCount) * sign).toFixed(2));
+  return {
+    ...node,
+    spawnedAt: nodeSpawnedAt,
+    value,
+    valuePulseCount: pulseCount,
+    holdMs: Math.round(Math.abs(value) * 470 + 650),
+  };
 }
 
 function getDemoNodePlan(member, index, cycle) {
@@ -876,7 +960,7 @@ function getDemoNodeCandidates(member, index, cycle) {
   const visibleNodes = getDemoVisibleNodes(cycle, EXPLOSION_START);
   const spawn = member.spawn;
   const byPressure = (a, b) => a.value - b.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
-  const byRiches = (a, b) => Math.abs(b.value) - Math.abs(a.value) || Math.hypot(a.x - DEMO_BLAST.x, a.y - DEMO_BLAST.y) - Math.hypot(b.x - DEMO_BLAST.x, b.y - DEMO_BLAST.y);
+  const byRiches = (a, b) => Math.abs(b.value) - Math.abs(a.value) || (a.distanceFromPlant || 0) - (b.distanceFromPlant || 0);
   const byReachableGreed = (a, b) => {
     const score = (node) =>
       Math.abs(node.value) * 70 +
@@ -1069,8 +1153,10 @@ function getDemoDetonationPosition(member, index, cycle) {
 
 function getDemoRoundScore(member, index, loop) {
   const ability = getDemoAbility(member, loop.cycle);
-  const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, Math.min(getDemoRepairElapsed(loop), getDemoDetonationElapsed(loop.cycle) - 1)));
-  const repaired = demoNodes.filter((node) => repairedIds.has(node.id));
+  const repaired = getDemoNodeStates(loop, Date.now(), null, getDemoVisibleNodes(loop.cycle, getDemoRepairElapsed(loop)), {
+    ignoreEscape: true,
+    ignoreStasis: true,
+  }).filter((node) => node.repairedBy === member.id);
   return repaired.reduce((score, node) => {
     return score + getNodeScoreValue(node, ability.id);
   }, 0);
@@ -1078,7 +1164,7 @@ function getDemoRoundScore(member, index, loop) {
 
 function getDemoPlayerOutcome(member, index, loop) {
   const position = getDemoDetonationPosition(member, index, loop.cycle);
-  const caught = Math.hypot(position.x - DEMO_BLAST.x, position.y - DEMO_BLAST.y) <= DEMO_BLAST.radius;
+  const caught = getDemoBlasts(loop.cycle).some((blast) => Math.hypot(position.x - blast.x, position.y - blast.y) <= blast.radius);
   const roundScore = getDemoRoundScore(member, index, loop);
   const detonated = isDemoDetonated(loop);
   return {
@@ -1146,7 +1232,10 @@ function getDemoActorState(member, index, loop, time) {
     const blastAge = clamp((loop.elapsed - EXPLOSION_START) / 1800, 0, 1);
     const position = getDemoDetonationPosition(member, index, loop.cycle);
     const knockback = 10 + index * 4;
-    const angle = Math.atan2(position.y - DEMO_BLAST.y, position.x - DEMO_BLAST.x);
+    const nearestPlant = getDemoPlants(loop.cycle)
+      .map((plant) => ({ plant, distance: Math.hypot(position.x - plant.x, position.y - plant.y) }))
+      .sort((a, b) => a.distance - b.distance)[0]?.plant || DEMO_BLAST;
+    const angle = Math.atan2(position.y - nearestPlant.y, position.x - nearestPlant.x);
     return {
       x: position.x + Math.cos(angle) * knockback * blastAge,
       y: position.y + Math.sin(angle) * knockback * blastAge + 4 * blastAge,
@@ -1250,14 +1339,21 @@ function getDemoRoom(loop, time) {
 
   const visibleNodes = getDemoVisibleNodes(loop.cycle, repairElapsed);
   const nodes = getDemoNodeStates(loop, now, actors, visibleNodes);
-  const nodeTimerDeltaMs = nodes.reduce((sum, node) => (node.repaired ? sum + node.value * DEMO_NODE_TIMER_FACTOR_MS : sum), 0);
+  const nodeTimerDeltaMs = nodes.reduce((sum, node) => {
+    if (!node.repaired) return sum;
+    const owner = squad.find((member) => member.id === node.repairedBy);
+    const ability = owner ? getDemoAbility(owner, loop.cycle) : null;
+    return sum + getEffectiveNodeValue(node, ability?.id) * DEMO_NODE_TIMER_FACTOR_MS;
+  }, 0);
   const countdownEndsAt = now + getDemoCountdownMs(loop);
 
   return {
     phase: detonated ? "explosion" : "repair",
     countdownEndsAt,
     phaseStartedAt: now - repairElapsed,
-    blast: DEMO_BLAST,
+    plants: getDemoPlants(loop.cycle),
+    blasts: getDemoBlasts(loop.cycle),
+    blast: getDemoBlasts(loop.cycle)[0],
     nodes,
     nodeTimerDeltaMs,
     repairedNodeCount: nodes.filter((node) => node.repaired).length,
@@ -1281,15 +1377,16 @@ function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes =
   const activeActors = actors || actorRoutes.map(({ member, index, ability, route }) => ({ ...route, member, ability, id: member.id, index }));
   const repairedNodeIds = new Set(actorRoutes.flatMap((entry) => entry.route.repairedNodeIds || []));
 
-  return visibleNodes.map((node, index) => {
+  return visibleNodes.map((baseNode, index) => {
+    const node = applyDemoNodePulse(baseNode, index, repairElapsed);
     const stasisLocked = isNodeInStasis(node, stasisSources);
     const claimant = activeActors.find((actor) => {
       if (!canSkillClaimNode(actor, node)) return false;
       return !stasisLocked || canPlayerClaimDuringStasis(actor);
     });
     const routeClaimant = actorRoutes.find((entry) => entry.member.id === claimant?.member?.id || entry.member.id === claimant?.id);
-    const nodeSpawnedAt = Math.max(0, (index - DEMO_INITIAL_NODE_COUNT) * DEMO_NODE_SPAWN_MS);
     const repaired = repairedNodeIds.has(node.id);
+    const repairedBy = repaired ? actorRoutes.find((entry) => entry.route.repairedNodeIds?.includes(node.id))?.member.id || null : null;
     const holdRemainingMs =
       !stasisLocked || canPlayerClaimDuringStasis(claimant)
         ? routeClaimant?.route.activeNode?.id === node.id
@@ -1300,9 +1397,9 @@ function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes =
     const claimedBy = !repaired && holdRemainingMs > 0 && claimant ? claimant.member?.id || claimant.id : null;
     return {
       ...node,
-      spawnedAt: nodeSpawnedAt,
       seed: node.x * 0.013 + node.y * 0.017 + loop.cycle,
       repaired,
+      repairedBy,
       state: repaired ? NODE_STATES.repaired : stasisLocked && !claimedBy ? NODE_STATES.stasis : claimedBy ? NODE_STATES.claimed : NODE_STATES.unclaimed,
       stasisLocked,
       claimedBy,
@@ -1338,8 +1435,13 @@ function getDemoSkillStats(loop, actors = null) {
     magnet: { label: "MAG", count: 0, detail: "remote claims" },
     stasis: { label: "STASIS", count: 0, detail: "players frozen" },
     warp: { label: "WARP", count: 0, detail: "portal hops" },
-    greed: { label: "GREED", count: 0, detail: "rich snaps" },
+    greed: { label: "GREED", count: 0, detail: "value snaps" },
   };
+
+  if (actors) {
+    stats.greed.count += actors.filter((actor) => actor.ability?.id === SKILL_IDS.greed && actor.activeNode).length;
+    stats.magnet.count += actors.filter((actor) => actor.ability?.id === SKILL_IDS.magnet && actor.activeNode).length;
+  }
 
   for (const [index, member] of squad.entries()) {
     const ability = getDemoAbility(member, loop.cycle);
@@ -1350,10 +1452,18 @@ function getDemoSkillStats(loop, actors = null) {
       stats.warp.count += countDemoMovingWindows(member, index, loop.cycle, elapsed, SKILL_CONFIG.warp.cooldownMs, SKILL_CONFIG.warp.activeMs);
     } else if (ability.id === "magnet") {
       const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, elapsed));
-      stats.magnet.count += demoNodes.filter((node) => repairedIds.has(node.id)).length;
+      stats.magnet.count += getDemoNodeStates({ ...loop, elapsed, rawElapsed: elapsed }, Date.now(), null, getDemoVisibleNodes(loop.cycle, elapsed), {
+        ignoreEscape: true,
+        ignoreStasis: true,
+      }).filter((node) => repairedIds.has(node.id)).length;
     } else if (ability.id === "greed") {
-      const repairedIds = new Set(getDemoCompletedRouteNodeIds(member, index, loop.cycle, elapsed));
-      stats.greed.count += demoNodes.filter((node) => repairedIds.has(node.id) && isHighValueNode(node)).length;
+      const greedRoute = getDemoRouteState(member, index, loop.cycle, elapsed, { ignoreEscape: true });
+      const repairedIds = new Set(greedRoute.repairedNodeIds || []);
+      stats.greed.count += getDemoNodeStates({ ...loop, elapsed, rawElapsed: elapsed }, Date.now(), null, getDemoVisibleNodes(loop.cycle, elapsed), {
+        ignoreEscape: true,
+        ignoreStasis: true,
+      }).filter((node) => repairedIds.has(node.id)).length;
+      if (greedRoute.activeNode) stats.greed.count += 1;
     }
   }
 
@@ -2213,7 +2323,11 @@ function drawNodeSmoke(style, node, time, isNegative, isRich) {
 }
 
 function drawPlant(style, time, progress, loop) {
-  drawCenteredPlant(() => drawNativePlant(style, time, progress, loop));
+  drawPlantAt(style, time, progress, loop, WORLD_CENTER, PLANT_WORLD_SCALE);
+}
+
+function drawPlantAt(style, time, progress, loop, plant = WORLD_CENTER, scale = PLANT_WORLD_SCALE * 0.88) {
+  drawCenteredPlant(() => drawNativePlant(style, time, progress, loop), plant, scale);
 }
 
 function drawSceneEntrance(style, progress, time) {
@@ -2265,10 +2379,10 @@ function drawNativePlant(style, time, progress, loop = getLoopState(0)) {
   drawIntactPlantBody(style, palette, progress, time, loop.upgradeLevel, damage);
 }
 
-function drawCenteredPlant(drawCallback) {
+function drawCenteredPlant(drawCallback, center = WORLD_CENTER, scale = PLANT_WORLD_SCALE) {
   ctx.save();
-  ctx.translate(WORLD_CENTER.x, WORLD_CENTER.y);
-  ctx.scale(PLANT_WORLD_SCALE, PLANT_WORLD_SCALE);
+  ctx.translate(center.x, center.y);
+  ctx.scale(scale, scale);
   ctx.translate(-LEGACY_PLANT_CENTER.x, -LEGACY_PLANT_CENTER.y);
   drawCallback();
   ctx.restore();
@@ -2811,9 +2925,12 @@ function drawPlayerArrow(style, x, y, ready) {
 function drawRoomObjectives(style, time, room = sessionState.room) {
   if (!room) return;
 
-  if ((room.phase === "repair" || room.phase === "explosion") && room.blast) {
+  const blasts = room.blasts?.length ? room.blasts : room.blast ? [room.blast] : [];
+  if ((room.phase === "repair" || room.phase === "explosion") && blasts.length) {
     ctx.globalAlpha = room.phase === "explosion" ? 0.24 : 0.12;
-    drawPixelCircle(room.blast.x, room.blast.y, room.blast.radius, style.scene.accent, style.scene.glow);
+    for (const blast of blasts) {
+      drawPixelCircle(blast.x, blast.y, blast.radius, style.scene.accent, style.scene.glow);
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -2871,6 +2988,27 @@ function drawRoomObjectives(style, time, room = sessionState.room) {
 
 }
 
+function drawSkillDebugAreas(style, room = sessionState.room) {
+  if (!showSkillConfig || !room?.players) return;
+  for (const player of Object.values(room.players)) {
+    const abilityId = player.ability?.id;
+    if (!abilityId || player.state === PLAYER_STATES.incapacitated) continue;
+    const x = Math.round(player.x || 0);
+    const y = Math.round(player.y || 0);
+    if (abilityId === SKILL_IDS.magnet) {
+      ctx.globalAlpha = 0.1;
+      drawPixelCircle(x, y, SKILL_CONFIG.magnet.claimRadius, SKILL_CONFIG.magnet.color || "#57d56c", "#57d56c");
+    } else if (abilityId === SKILL_IDS.stasis) {
+      ctx.globalAlpha = 0.1;
+      drawPixelCircle(x, y, SKILL_CONFIG.stasis.radius, "#9fdfff", "#9fdfff");
+    } else if (abilityId === SKILL_IDS.warp) {
+      ctx.globalAlpha = 0.1;
+      drawPixelCircle(x, y, SKILL_CONFIG.warp.teleportRange, "#d5983b", "#d5983b");
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
 function drawClaimTimers(style, room = sessionState.room) {
   if (!room || room.phase !== "repair") return;
 
@@ -2923,23 +3061,26 @@ function drawBuildingCountdown(style, time, room = sessionState.room) {
   const blink = seconds <= 7.5 ? Math.sin(time / 90) > -0.25 : Math.sin(time / 280) > -0.7;
 
   const label = countdownLabel(room).padStart(5, "0");
-  const x = 365;
-  const y = 192;
-  ctx.globalAlpha = blink ? 1 : 0.46;
-  px(x - 18, y - 21, 86, 31, "rgba(0, 0, 0, 0.68)");
-  px(x - 18, y - 21, 86, 3, style.scene.accent);
-  ctx.fillStyle = seconds <= 7.5 ? "#ff6b28" : style.css.text;
-  ctx.font = "24px monospace";
-  ctx.fillText(label, x, y);
-  if (room.nodeTimerDeltaMs !== undefined) {
-    const deltaSeconds = room.nodeTimerDeltaMs / 1000;
-    const deltaLabel = `${deltaSeconds >= 0 ? "+" : ""}${deltaSeconds.toFixed(1)}s nodes`;
-    const repairedLabel = room.repairedNodeCount ? `${room.repairedNodeCount} captured` : "claiming";
-    ctx.font = "7px monospace";
-    ctx.fillStyle = deltaSeconds < 0 ? "#ff6b28" : style.scene.glow;
-    ctx.fillText(deltaLabel, x - 8, y + 13);
-    ctx.fillStyle = style.css.text;
-    ctx.fillText(repairedLabel, x - 8, y + 22);
+  const plants = room.plants?.length ? room.plants : [{ x: 365, y: 192 }];
+  for (const plant of plants) {
+    const x = Math.round(plant.x - 20);
+    const y = Math.round(plant.y - 24);
+    ctx.globalAlpha = blink ? 1 : 0.46;
+    px(x - 18, y - 21, 86, 31, "rgba(0, 0, 0, 0.68)");
+    px(x - 18, y - 21, 86, 3, style.scene.accent);
+    ctx.fillStyle = seconds <= 7.5 ? "#ff6b28" : style.css.text;
+    ctx.font = "24px monospace";
+    ctx.fillText(label, x, y);
+    if (room.nodeTimerDeltaMs !== undefined && plant === plants[0]) {
+      const deltaSeconds = room.nodeTimerDeltaMs / 1000;
+      const deltaLabel = `${deltaSeconds >= 0 ? "+" : ""}${deltaSeconds.toFixed(1)}s nodes`;
+      const repairedLabel = room.repairedNodeCount ? `${room.repairedNodeCount} captured` : "claiming";
+      ctx.font = "7px monospace";
+      ctx.fillStyle = deltaSeconds < 0 ? "#ff6b28" : style.scene.glow;
+      ctx.fillText(deltaLabel, x - 8, y + 13);
+      ctx.fillStyle = style.css.text;
+      ctx.fillText(repairedLabel, x - 8, y + 22);
+    }
   }
   ctx.globalAlpha = 1;
 }
@@ -2964,8 +3105,8 @@ function drawDemoHud(style, room, loop) {
   if (!room || room.phase !== "repair") return;
   const panelY = 8;
   const skillsX = 8;
-  const skillsWidth = 188;
-  const runnersX = 204;
+  const skillsWidth = showSkillConfig ? 246 : 188;
+  const runnersX = skillsX + skillsWidth + 8;
   const runnersWidth = 318;
   const panelHeight = 104;
   px(skillsX, panelY, skillsWidth, panelHeight, "rgba(0, 0, 0, 0.68)");
@@ -2986,7 +3127,7 @@ function drawDemoHud(style, room, loop) {
     ctx.fillStyle = style.css.text;
     ctx.fillText(ability.label.toUpperCase().padEnd(7, " "), skillsX + 21, y);
     ctx.fillStyle = style.css.muted;
-    ctx.fillText(ability.hint, skillsX + 70, y);
+    ctx.fillText(showSkillConfig ? skillConfigLabel(ability.id) : ability.hint, skillsX + 70, y);
   }
 
   const leaderboardRows = buildLeaderboardRows(
@@ -3018,6 +3159,15 @@ function drawDemoHud(style, room, loop) {
     ctx.fillStyle = style.css.muted;
     ctx.fillText(`${formatScore(row.previousScore)}+${roundPrefix}${formatScore(row.roundScore)}`, runnersX + 136, y);
   }
+}
+
+function skillConfigLabel(skillId) {
+  if (skillId === SKILL_IDS.boost) return `x${SKILL_CONFIG.boost.speedMultiplier} ${SKILL_CONFIG.boost.activeMs / 1000}s/${SKILL_CONFIG.boost.cooldownMs / 1000}s`;
+  if (skillId === SKILL_IDS.magnet) return `r${SKILL_CONFIG.magnet.claimRadius} capx${SKILL_CONFIG.magnet.captureMultiplier} scorex${SKILL_CONFIG.magnet.scoreMultiplier}`;
+  if (skillId === SKILL_IDS.stasis) return `r${SKILL_CONFIG.stasis.radius} ${SKILL_CONFIG.stasis.freezeMs / 1000}s/${SKILL_CONFIG.stasis.cooldownMs / 1000}s`;
+  if (skillId === SKILL_IDS.warp) return `r${SKILL_CONFIG.warp.teleportRange} ${SKILL_CONFIG.warp.activeMs}ms/${SKILL_CONFIG.warp.cooldownMs}ms`;
+  if (skillId === SKILL_IDS.greed) return `low x${SKILL_CONFIG.greed.lowValueScoreMultiplier} fast hi x${SKILL_CONFIG.greed.highValueScoreMultiplier}`;
+  return "";
 }
 
 function drawDemoSkillLog(style, room) {
@@ -3626,6 +3776,8 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
     repairedNodeCount: room.repairedNodeCount,
     claimedNodeCount: nodes.filter((node) => node.claimedBy).length,
     nodeCount: nodes.length,
+    plants: room.plants || [],
+    blasts: room.blasts || (room.blast ? [room.blast] : []),
     summary: room.summary || [],
     nodes: nodes.map((node) => ({
       id: node.id,
@@ -3637,7 +3789,9 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
       claimedBy: node.claimedBy || null,
       bonus: Boolean(node.bonus),
       negative: node.value < 0,
-      distanceFromPlant: Math.hypot(node.x - DEMO_BLAST.x, node.y - DEMO_BLAST.y),
+      distanceFromPlant: node.distanceFromPlant ?? distanceToNearestDemoPlant(node, loop.cycle),
+      plantHeat: node.plantHeat ?? demoNodeHeat(node, getDemoPlants(loop.cycle)),
+      valuePulseCount: node.valuePulseCount || 0,
     })),
     playerCount: players.length,
     players: players.map((player) => ({
@@ -3653,6 +3807,7 @@ function getDemoMechanicsSnapshot(totalElapsed, time = totalElapsed) {
     skillStats: getDemoSkillStats(loop, Object.values(room.players || {}).map((player) => ({ ability: player.ability }))),
     audioCueCounts: { ...audioState.demoAbilityCueCounts },
     demoOnlyAbilityIds: [...DEMO_ONLY_ABILITY_IDS],
+    skillConfig: SKILL_CONFIG,
     playerAbilities: players.map((player) => player.ability?.id).filter(Boolean),
     routePlans,
   };
@@ -3706,10 +3861,15 @@ function render(now) {
     return;
   }
   drawBackground(style, now);
-  drawPlant(style, now, plantProgress, loop);
-  drawCenteredPlant(() => drawExplosion(style, loop.elapsed, now));
-  drawRoomObjectives(style, now, demoRoom || sessionState.room);
-  drawBuildingCountdown(style, now, demoRoom || sessionState.room);
+  const activeRoom = demoRoom || sessionState.room;
+  const plants = activeRoom?.plants?.length ? activeRoom.plants : [{ id: "plant-1", ...WORLD_CENTER, blast: activeRoom?.blast || DEMO_BLAST }];
+  for (const plant of plants) {
+    drawPlantAt(style, now, plantProgress, loop, plant, plants.length > 1 ? PLANT_WORLD_SCALE * 0.42 : PLANT_WORLD_SCALE);
+    drawCenteredPlant(() => drawExplosion(style, loop.elapsed, now), plant, plants.length > 1 ? PLANT_WORLD_SCALE * 0.42 : PLANT_WORLD_SCALE);
+  }
+  drawRoomObjectives(style, now, activeRoom);
+  drawSkillDebugAreas(style, activeRoom);
+  drawBuildingCountdown(style, now, activeRoom);
   if (sessionState.room) {
     drawRoomPlayers(style);
     drawClaimTimers(style);
@@ -3748,6 +3908,11 @@ roomReadyButton.addEventListener("click", toggleReady);
 endRoomButton.addEventListener("click", endRoomGame);
 leaveRoomButton.addEventListener("click", leaveRoom);
 copyRoomButton.addEventListener("click", copyRoomLink);
+skillConfigToggle?.addEventListener("click", () => {
+  showSkillConfig = !showSkillConfig;
+  skillConfigToggle.setAttribute("aria-pressed", String(showSkillConfig));
+  skillConfigToggle.textContent = showSkillConfig ? "Hide config values" : "Show config values";
+});
 sessionActions.addEventListener("click", (event) => {
   if (event.target.closest("button")) {
     sessionActions.open = false;
