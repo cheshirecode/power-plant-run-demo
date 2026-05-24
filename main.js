@@ -228,8 +228,9 @@ const DEMO_INITIAL_NODE_COUNT = 40;
 const DEMO_NODE_SPAWN_PER_PLAYER_MULTIPLIER = 1.5;
 const DEMO_RUNNER_SPEED = 2.15;
 const DEMO_ESCAPE_THRESHOLD_MS = 2600;
-const DEMO_NODE_TIMER_FACTOR_MS = 900;
+const DEMO_NODE_TIMER_FACTOR_MS = 500;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
+const DEMO_RISK_CLAIM_WINDOW_MS = 1200;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_RED_EXCLUSION_RADIUS = DEMO_BLAST.radius + 13;
 const DEMO_PLANT_COUNT = 2;
@@ -751,7 +752,13 @@ function getDemoNodeTimerDeltaMs(cycle, elapsed) {
 
 function getDemoDetonationElapsed(cycle) {
   if (demoDetonationCache.has(cycle)) return demoDetonationCache.get(cycle);
-  const detonationElapsed = EXPLOSION_START;
+  let detonationElapsed = EXPLOSION_START;
+  for (let elapsed = 0; elapsed <= EXPLOSION_START; elapsed += 100) {
+    if (getDemoCountdownMsForElapsed(cycle, elapsed) <= 0) {
+      detonationElapsed = elapsed;
+      break;
+    }
+  }
   demoDetonationCache.set(cycle, detonationElapsed);
   return detonationElapsed;
 }
@@ -1061,7 +1068,23 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
   const targets = getDemoNodePlan(member, index, cycle);
 
   if (!options.ignoreEscape && elapsed >= escapeStart) {
-    const start = getDemoRouteState(member, index, cycle, escapeStart - 1, options);
+    const riskClaim = getDemoRiskClaimTarget(member, index, cycle, escapeStart, elapsed, ability);
+    if (riskClaim) {
+      const progress = clamp((elapsed - escapeStart) / riskClaim.holdMs, 0, 1);
+      return {
+        x: riskClaim.node.x,
+        y: riskClaim.node.y,
+        phase: "claim",
+        activeNode: riskClaim.node,
+        holdRemainingMs: riskClaim.holdMs * (1 - progress),
+        holdDurationMs: riskClaim.holdMs,
+        repairedNodeIds: [
+          ...getDemoCompletedRouteNodeIds(member, index, cycle, escapeStart - 1, { ...options, ignoreEscape: true }),
+          ...(progress >= 1 ? [riskClaim.node.id] : []),
+        ],
+      };
+    }
+    const start = getDemoRouteState(member, index, cycle, escapeStart - 1, { ...options, ignoreEscape: true });
     const progress = easeInOut(clamp((elapsed - escapeStart) / escapeThreshold, 0, 1));
     return {
       ...getPointOnPath([start, member.escape], progress),
@@ -1122,6 +1145,23 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
     holdRemainingMs: 0,
     repairedNodeIds: [...repairedNodeIds],
   };
+}
+
+function getDemoRiskClaimTarget(member, index, cycle, escapeStart, elapsed, ability) {
+  const remaining = getDemoCountdownMsForElapsed(cycle, escapeStart);
+  if (remaining <= 0 || remaining > DEMO_ESCAPE_THRESHOLD_MS) return null;
+  const start = getDemoRouteState(member, index, cycle, escapeStart - 1, { ignoreEscape: true });
+  const alreadyRepaired = new Set(start.repairedNodeIds || []);
+  return getDemoVisibleNodes(cycle, escapeStart)
+    .filter((node) => node.value > 0 && !alreadyRepaired.has(node.id))
+    .map((node) => {
+      const distance = Math.hypot(node.x - start.x, node.y - start.y);
+      const travelMs = getDemoTravelState(distance, DEMO_RUNNER_PIXELS_PER_MS * getDemoPathSpeed(ability), ability, escapeStart, 10_000).elapsedMs;
+      const holdMs = getDemoHoldDurationMs(applyDemoNodePulse(node, 0, escapeStart), ability);
+      return { node, holdMs, totalMs: travelMs + holdMs, score: node.value * 100 - distance };
+    })
+    .filter((candidate) => candidate.holdMs <= DEMO_RISK_CLAIM_WINDOW_MS && candidate.totalMs <= remaining + 700 && elapsed < escapeStart + candidate.totalMs)
+    .sort((a, b) => b.score - a.score)[0] || null;
 }
 
 function getDemoEscapeStartElapsed(cycle, escapeThreshold) {
@@ -3062,25 +3102,35 @@ function drawBuildingCountdown(style, time, room = sessionState.room) {
 
   const label = countdownLabel(room).padStart(5, "0");
   const plants = room.plants?.length ? room.plants : [{ x: 365, y: 192 }];
-  for (const plant of plants) {
-    const x = Math.round(plant.x - 20);
-    const y = Math.round(plant.y - 24);
-    ctx.globalAlpha = blink ? 1 : 0.46;
-    px(x - 18, y - 21, 86, 31, "rgba(0, 0, 0, 0.68)");
-    px(x - 18, y - 21, 86, 3, style.scene.accent);
-    ctx.fillStyle = seconds <= 7.5 ? "#ff6b28" : style.css.text;
-    ctx.font = "24px monospace";
-    ctx.fillText(label, x, y);
-    if (room.nodeTimerDeltaMs !== undefined && plant === plants[0]) {
-      const deltaSeconds = room.nodeTimerDeltaMs / 1000;
-      const deltaLabel = `${deltaSeconds >= 0 ? "+" : ""}${deltaSeconds.toFixed(1)}s nodes`;
-      const repairedLabel = room.repairedNodeCount ? `${room.repairedNodeCount} captured` : "claiming";
-      ctx.font = "7px monospace";
-      ctx.fillStyle = deltaSeconds < 0 ? "#ff6b28" : style.scene.glow;
-      ctx.fillText(deltaLabel, x - 8, y + 13);
-      ctx.fillStyle = style.css.text;
-      ctx.fillText(repairedLabel, x - 8, y + 22);
-    }
+  const anchor =
+    plants.length > 1
+      ? {
+          x: plants.reduce((sum, plant) => sum + plant.x, 0) / plants.length - 42,
+          y: Math.min(...plants.map((plant) => plant.y)) - 58,
+        }
+      : { x: plants[0].x - 20, y: plants[0].y - 24 };
+  const x = Math.round(clamp(anchor.x, 24, VIEW.width - 96));
+  const y = Math.round(clamp(anchor.y, 38, VIEW.height - 54));
+  ctx.globalAlpha = blink ? 1 : 0.46;
+  px(x - 18, y - 21, 96, 31, "rgba(0, 0, 0, 0.72)");
+  px(x - 18, y - 21, 96, 3, style.scene.accent);
+  ctx.fillStyle = seconds <= 7.5 ? "#ff6b28" : style.css.text;
+  ctx.font = "24px monospace";
+  ctx.fillText(label, x, y);
+  if (plants.length > 1) {
+    ctx.font = "6px monospace";
+    ctx.fillStyle = style.css.muted;
+    ctx.fillText("SYNC GRID", x - 12, y - 25);
+  }
+  if (room.nodeTimerDeltaMs !== undefined) {
+    const deltaSeconds = room.nodeTimerDeltaMs / 1000;
+    const deltaLabel = `${deltaSeconds >= 0 ? "+" : ""}${deltaSeconds.toFixed(1)}s nodes`;
+    const repairedLabel = room.repairedNodeCount ? `${room.repairedNodeCount} captured` : "claiming";
+    ctx.font = "7px monospace";
+    ctx.fillStyle = deltaSeconds < 0 ? "#ff6b28" : style.scene.glow;
+    ctx.fillText(deltaLabel, x - 8, y + 13);
+    ctx.fillStyle = style.css.text;
+    ctx.fillText(repairedLabel, x - 8, y + 22);
   }
   ctx.globalAlpha = 1;
 }

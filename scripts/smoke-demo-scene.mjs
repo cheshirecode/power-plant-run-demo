@@ -41,9 +41,20 @@ assertNodeValueRules(opening.nodes, 128, "demo opening");
 
 const firstSpawnWave = debug.getSnapshotAt(3_000, 3_000);
 assert(firstSpawnWave.nodeCount === 52, `expected 12 nodes to spawn at first demo wave, got ${firstSpawnWave.nodeCount - opening.nodeCount}`);
+assert(opening.plants.length === 2, `expected 2 synced demo plants, got ${opening.plants.length}`);
+assert(opening.blasts.every((blast) => blast.x - blast.radius >= 0 && blast.x + blast.radius <= 768 && blast.y - blast.radius >= 0 && blast.y + blast.radius <= 432), "demo blast radius exceeded map bounds");
+
+const detonationElapsed = (() => {
+  for (let elapsed = 0; elapsed < timings.explosionStart; elapsed += 100) {
+    if (debug.getSnapshotAt(elapsed, elapsed).countdownMs <= 0) return elapsed;
+  }
+  return timings.explosionStart;
+})();
+assert(debug.getSnapshotAt(Math.max(0, detonationElapsed - 100), Math.max(0, detonationElapsed - 100)).stage === "repair", "demo detonated before countdown reached zero");
+assert(debug.getSnapshotAt(detonationElapsed, detonationElapsed).stage !== "repair", "demo stayed in repair after countdown reached zero");
 
 const repairSamples = [];
-for (let elapsed = 1_000; elapsed < timings.explosionStart; elapsed += 500) {
+for (let elapsed = 1_000; elapsed < detonationElapsed; elapsed += 500) {
   repairSamples.push(debug.getSnapshotAt(elapsed, elapsed));
 }
 assert(repairSamples.some((sample) => sample.claimedNodeCount > 0), "no node was claimed during demo repair");
@@ -79,7 +90,7 @@ assertCooldownTiming(debug, "boost", {
   coolingElapsed: 1_500,
   cooldownElapsed: 3_900,
   nextActiveElapsed: 4_000,
-  nextCoolingElapsed: 5_100,
+  nextCoolingElapsed: null,
   activePredicate: (player) => player.boostActive,
 });
 assertCooldownTiming(debug, "stasis", {
@@ -273,12 +284,16 @@ function assertCooldownTiming(debug, ability, timings) {
   const cooldownPlayers = debug.getSnapshotAt(timings.cooldownElapsed, timings.cooldownElapsed).players.filter((player) => player.ability === ability);
   const nextActiveSample = debug.getSnapshotAt(timings.nextActiveElapsed, timings.nextActiveElapsed);
   const nextActivePlayers = nextActiveSample.players.filter((player) => player.ability === ability);
-  const nextCoolingPlayers = debug.getSnapshotAt(timings.nextCoolingElapsed, timings.nextCoolingElapsed).players.filter((player) => player.ability === ability);
+  const nextCoolingPlayers = Number.isFinite(timings.nextCoolingElapsed)
+    ? debug.getSnapshotAt(timings.nextCoolingElapsed, timings.nextCoolingElapsed).players.filter((player) => player.ability === ability)
+    : [];
   assert(activePlayers.length > 0, `${ability} player missing`);
   assert(activePlayers.every((player) => player.skillCooldown === 1), `${ability} cooldown was not full at activation`);
   assert(coolingPlayers.some((player) => player.skillCooldown > 0 && player.skillCooldown < 1), `${ability} cooldown did not drain after activation`);
   assert(cooldownPlayers.some((player) => player.skillCooldown > 0 && player.skillCooldown < 0.08), `${ability} cooldown did not approach empty before reactivation`);
   assert(nextActivePlayers.some((player) => player.skillCooldown === 1), `${ability} cooldown did not refill at next activation`);
-  assert(nextCoolingPlayers.some((player) => player.skillCooldown > 0 && player.skillCooldown < 1), `${ability} cooldown did not drain after reactivation`);
+  if (Number.isFinite(timings.nextCoolingElapsed)) {
+    assert(nextCoolingPlayers.some((player) => player.skillCooldown > 0 && player.skillCooldown < 1), `${ability} cooldown did not drain after reactivation`);
+  }
   assert(nextActivePlayers.some((player) => timings.activePredicate(player, nextActiveSample)), `${ability} did not trigger at its next activation timing`);
 }

@@ -21,6 +21,7 @@ const NODE_BONUS_COUNT_MAX = 4;
 const NODE_NEGATIVE_CHANCE = 0.32;
 const NODE_INITIAL_COUNT = 20;
 const NODE_RESPAWN_MS = 3_000;
+const NODE_TIMER_FACTOR_MS = 500;
 const NODE_HOLD_SECONDS_PER_POINT = 0.5;
 const NODE_SIZE_MIN = 7;
 const NODE_SIZE_MAX = 10;
@@ -468,7 +469,7 @@ export class GameRoom {
     const timerValue = getEffectiveNodeValue(node, abilityId);
     player.roundScore = roundValue((player.roundScore || 0) + scoreValue);
     this.roomState.score = roundValue(this.roomState.score + scoreValue);
-    this.roomState.countdownEndsAt += Math.round(timerValue * 1500);
+    this.roomState.countdownEndsAt += Math.round(timerValue * NODE_TIMER_FACTOR_MS);
     if (this.roomState.countdownEndsAt < Date.now()) {
       this.roomState.countdownEndsAt = Date.now();
     }
@@ -942,6 +943,7 @@ export const __ROOM_MECHANICS_DEBUG__ = {
   redExclusionRadius: NODE_RED_EXCLUSION_RADIUS,
   initialNodeCount: NODE_INITIAL_COUNT,
   nodeRespawnMs: NODE_RESPAWN_MS,
+  nodeTimerFactorMs: NODE_TIMER_FACTOR_MS,
   isNodeSpawned,
   nodeSpawnWave,
   canPlayerClaimNode,
