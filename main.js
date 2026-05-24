@@ -1,5 +1,6 @@
 import { countdownLabel, countdownMs, countdownSeconds, formatHoldLabel, formatNodeValue, formatScore } from "./client/formatters.js";
 import { buildLeaderboardRows } from "./client/leaderboard.js";
+import { buildRoomStatusText } from "./client/room-status.js";
 import { buildRoomUrl, clearRoomUrl, getRoomIdFromUrl, normalizeRoomId, updateRoomUrl } from "./client/room-url.js";
 import {
   PLAYER_STATES,
@@ -1496,7 +1497,7 @@ function updateSessionUi() {
   renderRoomList();
 }
 
-function updateRoomStatus(nextStatus = null) {
+function updateRoomStatus(nextStatus = null, now = Date.now()) {
   if (nextStatus) {
     roomStatus.classList.remove("is-hidden");
     roomStatus.textContent = nextStatus;
@@ -1510,16 +1511,7 @@ function updateRoomStatus(nextStatus = null) {
   }
 
   roomStatus.classList.remove("is-hidden");
-  const players = Object.values(sessionState.room?.players || {});
-  const activeCount = players.filter((player) => !player.spectator && !player.bot).length;
-  const botCount = players.filter((player) => !player.spectator && player.bot).length;
-  const spectatorCount = players.filter((player) => player.spectator).length;
-  const targetCount = sessionState.room?.targetPlayerCount || getSelectedRoomSize();
-  const phase = sessionState.room?.phase || "room";
-  const suffix = phase === "repair" ? ` · ${getCountdownLabel()}s` : "";
-  const bots = botCount > 0 ? ` + ${botCount} bot` : "";
-  const spectators = spectatorCount > 0 ? ` · ${spectatorCount} watching` : "";
-  roomStatus.textContent = `${sessionState.roomId} · ${activeCount}/${targetCount}${bots}${spectators} · ${phase}${suffix}`;
+  roomStatus.textContent = buildRoomStatusText(sessionState.roomId, sessionState.room, getSelectedRoomSize(), now);
 }
 
 function updateRoomSheet() {
@@ -3702,6 +3694,7 @@ function render(now) {
   if (sessionState.room) {
     updateRoomPosition(loop, now);
     pollRoomState(now);
+    updateRoomStatus(null, Date.now());
   } else {
     pollRoomList(now);
   }
