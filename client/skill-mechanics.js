@@ -26,9 +26,9 @@ export const SKILL_CONFIG = {
     speedMultiplier: 2,
   },
   magnet: {
-    claimRadius: 72,
-    captureMultiplier: 0.36,
-    scoreMultiplier: 1.35,
+    claimRadius: 100,
+    captureMultiplier: 0.28,
+    scoreMultiplier: 1.66,
   },
   stasis: {
     cooldownMs: 2600,
@@ -39,17 +39,17 @@ export const SKILL_CONFIG = {
     scoreMultiplier: 1.35,
   },
   warp: {
-    cooldownMs: 1700,
-    activeMs: 360,
-    teleportRange: 130,
-    captureMultiplier: 0.54,
-    scoreMultiplier: 1.08,
+    cooldownMs: 1650,
+    activeMs: 370,
+    teleportRange: 140,
+    captureMultiplier: 0.52,
+    scoreMultiplier: 1.12,
   },
   greed: {
     highValueMin: 7,
     lowValueHoldMultiplier: 0.5,
-    highValueHoldMultiplier: 1,
-    lowValueScoreMultiplier: 0.75,
+    highValueHoldMultiplier: 0.94,
+    lowValueScoreMultiplier: 0.82,
     highValueScoreMultiplier: 1.25,
   },
 };

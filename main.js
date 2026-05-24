@@ -877,7 +877,11 @@ function getDemoNodeCandidates(member, index, cycle) {
   const byPressure = (a, b) => a.value - b.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
   const byRiches = (a, b) => Math.abs(b.value) - Math.abs(a.value) || Math.hypot(a.x - DEMO_BLAST.x, a.y - DEMO_BLAST.y) - Math.hypot(b.x - DEMO_BLAST.x, b.y - DEMO_BLAST.y);
   const byReachableGreed = (a, b) => {
-    const score = (node) => Math.abs(node.value) * 80 + (isHighValueNode(node) ? 120 : 0) - Math.hypot(node.x - spawn.x, node.y - spawn.y);
+    const score = (node) =>
+      Math.abs(node.value) * 70 +
+      (isHighValueNode(node) ? 150 : 0) +
+      Math.max(0, node.value) * 18 -
+      Math.hypot(node.x - spawn.x, node.y - spawn.y) * 0.72;
     return score(b) - score(a);
   };
   const byPositive = (a, b) => b.value - a.value || Math.hypot(a.x - spawn.x, a.y - spawn.y) - Math.hypot(b.x - spawn.x, b.y - spawn.y);
@@ -892,11 +896,12 @@ function getDemoNodeCandidates(member, index, cycle) {
     return [...visibleNodes].filter((node) => node.value > 0).sort(byPositive);
   }
   if (ability.id === "magnet") {
+    const clusterNodes = getDemoVisibleNodes(cycle, EXPLOSION_START);
     return [...visibleNodes].sort((a, b) => {
       const magnetScore = (node) =>
-        Math.abs(node.value) * 50 +
-        getDemoVisibleNodes(cycle, EXPLOSION_START).filter((other) => Math.hypot(other.x - node.x, other.y - node.y) <= SKILL_CONFIG.magnet.claimRadius).length * 35 -
-        Math.hypot(node.x - spawn.x, node.y - spawn.y);
+        Math.abs(node.value) * 32 +
+        clusterNodes.filter((other) => Math.hypot(other.x - node.x, other.y - node.y) <= SKILL_CONFIG.magnet.claimRadius).length * 105 -
+        Math.hypot(node.x - spawn.x, node.y - spawn.y) * 0.52;
       return magnetScore(b) - magnetScore(a);
     });
   }
