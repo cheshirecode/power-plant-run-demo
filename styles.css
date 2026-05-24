@@ -263,8 +263,9 @@ h1 {
   color: var(--text);
   cursor: pointer;
   font: inherit;
-  padding: 8px;
+  padding: 8px 9px;
   text-align: left;
+  text-transform: uppercase;
 }
 
 .legend-config-toggle[aria-pressed="true"] {
@@ -280,6 +281,18 @@ h1 {
 .legend-copy strong {
   color: var(--text);
   font-weight: 700;
+}
+
+.legend-config-value {
+  display: none;
+  margin-top: 4px;
+  color: var(--accent-2);
+  font-size: 0.5rem;
+  line-height: 1.25;
+}
+
+.show-skill-config .legend-config-value {
+  display: block;
 }
 
 .control-button:disabled,

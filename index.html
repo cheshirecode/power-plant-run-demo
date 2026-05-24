@@ -120,26 +120,43 @@
               <span class="button-label">Demo skills</span>
             </summary>
             <div class="action-menu-panel legend-menu-panel">
-              <button class="legend-config-toggle" id="skill-config-toggle" type="button" aria-pressed="false">Show config values</button>
+              <button class="legend-config-toggle" id="skill-config-toggle" type="button" aria-pressed="false">
+                Debug config + ranges: off
+              </button>
               <div class="legend-row">
                 <span class="skill-icon skill-boost" aria-hidden="true"></span>
-                <span class="legend-copy"><strong>Boost</strong> bursts at 2x speed for 1s, then cools down.</span>
+                <span class="legend-copy">
+                  <strong>Boost</strong> bursts at 2x speed for 1s, then cools down.
+                  <span class="legend-config-value">speed x2, active 1s, cooldown 3s</span>
+                </span>
               </div>
               <div class="legend-row">
                 <span class="skill-icon skill-magnet" aria-hidden="true"></span>
-                <span class="legend-copy"><strong>Magnet</strong> starts claims from farther away than touch range.</span>
+                <span class="legend-copy">
+                  <strong>Magnet</strong> starts claims from farther away than touch range.
+                  <span class="legend-config-value">radius 100px, capture x0.28, score x1.66</span>
+                </span>
               </div>
               <div class="legend-row">
                 <span class="skill-icon skill-stasis" aria-hidden="true"></span>
-                <span class="legend-copy"><strong>Stasis</strong> briefly stops rivals and locks nearby nodes; interrupted non-Stasis claims reset.</span>
+                <span class="legend-copy">
+                  <strong>Stasis</strong> briefly stops rivals and locks nearby nodes; interrupted non-Stasis claims reset.
+                  <span class="legend-config-value">radius 160px, freeze 1.15s, cooldown 2.6s</span>
+                </span>
               </div>
               <div class="legend-row">
                 <span class="skill-icon skill-warp" aria-hidden="true"></span>
-                <span class="legend-copy"><strong>Warp</strong> scans nearby nodes and jumps to the highest-value one in range.</span>
+                <span class="legend-copy">
+                  <strong>Warp</strong> scans nearby nodes and jumps to the highest-value one in range.
+                  <span class="legend-config-value">scan 140px, hop 370ms, cooldown 1.65s</span>
+                </span>
               </div>
               <div class="legend-row">
                 <span class="skill-icon skill-greed" aria-hidden="true"></span>
-                <span class="legend-copy"><strong>Greed</strong> claims low-value nodes 50% faster but scores 75% value; high-value nodes (7+ or bonus) take normal time and score 25% extra.</span>
+                <span class="legend-copy">
+                  <strong>Greed</strong> claims low-value nodes 50% faster but scores 75% value; high-value nodes (7+ or bonus) take normal time and score 25% extra.
+                  <span class="legend-config-value">low hold x0.5/value x0.82, high hold x0.94/value x1.25</span>
+                </span>
               </div>
             </div>
           </details>

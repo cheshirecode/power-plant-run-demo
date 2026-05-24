@@ -3047,18 +3047,37 @@ function drawSkillDebugAreas(style, room = sessionState.room) {
     if (!abilityId || player.state === PLAYER_STATES.incapacitated) continue;
     const x = Math.round(player.x || 0);
     const y = Math.round(player.y || 0);
-    if (abilityId === SKILL_IDS.magnet) {
-      ctx.globalAlpha = 0.1;
-      drawPixelCircle(x, y, SKILL_CONFIG.magnet.claimRadius, SKILL_CONFIG.magnet.color || "#57d56c", "#57d56c");
-    } else if (abilityId === SKILL_IDS.stasis) {
-      ctx.globalAlpha = 0.1;
-      drawPixelCircle(x, y, SKILL_CONFIG.stasis.radius, "#9fdfff", "#9fdfff");
-    } else if (abilityId === SKILL_IDS.warp) {
-      ctx.globalAlpha = 0.1;
-      drawPixelCircle(x, y, SKILL_CONFIG.warp.teleportRange, "#d5983b", "#d5983b");
-    }
+    const debug = skillDebugArea(abilityId);
+    if (!debug) continue;
+    ctx.globalAlpha = 0.1;
+    drawPixelCircle(x, y, debug.radius, debug.fill, debug.edge);
+    ctx.globalAlpha = 0.36;
+    drawPixelCircle(x, y, Math.max(6, Math.round(debug.radius / 4)), debug.fill);
+    ctx.globalAlpha = 0.92;
+    const label = `${debug.label} R${debug.radius}`;
+    const width = Math.max(42, label.length * 5 + 8);
+    const labelX = Math.round(clamp(x - width / 2, 4, VIEW.width - width - 4));
+    const labelY = Math.round(clamp(y - debug.radius - 12, 6, VIEW.height - 12));
+    px(labelX, labelY, width, 10, "rgba(0, 0, 0, 0.76)");
+    px(labelX, labelY, width, 2, debug.edge);
+    ctx.fillStyle = style.css.text;
+    ctx.font = "6px monospace";
+    ctx.fillText(label, labelX + 4, labelY + 8);
     ctx.globalAlpha = 1;
   }
+}
+
+function skillDebugArea(abilityId) {
+  if (abilityId === SKILL_IDS.magnet) {
+    return { label: "MAG", radius: SKILL_CONFIG.magnet.claimRadius, fill: "rgba(87, 213, 108, 0.72)", edge: "#57d56c" };
+  }
+  if (abilityId === SKILL_IDS.stasis) {
+    return { label: "STASIS", radius: SKILL_CONFIG.stasis.radius, fill: "rgba(159, 223, 255, 0.72)", edge: "#9fdfff" };
+  }
+  if (abilityId === SKILL_IDS.warp) {
+    return { label: "WARP", radius: SKILL_CONFIG.warp.teleportRange, fill: "rgba(213, 152, 59, 0.72)", edge: "#d5983b" };
+  }
+  return null;
 }
 
 function drawClaimTimers(style, room = sessionState.room) {
@@ -4041,7 +4060,8 @@ copyRoomButton.addEventListener("click", copyRoomLink);
 skillConfigToggle?.addEventListener("click", () => {
   showSkillConfig = !showSkillConfig;
   skillConfigToggle.setAttribute("aria-pressed", String(showSkillConfig));
-  skillConfigToggle.textContent = showSkillConfig ? "Hide config values" : "Show config values";
+  shell.classList.toggle("show-skill-config", showSkillConfig);
+  skillConfigToggle.textContent = showSkillConfig ? "Debug config + ranges: on" : "Debug config + ranges: off";
 });
 sessionActions.addEventListener("click", (event) => {
   if (event.target.closest("button")) {
