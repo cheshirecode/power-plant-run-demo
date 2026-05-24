@@ -231,6 +231,8 @@ const DEMO_ESCAPE_THRESHOLD_MS = 2600;
 const DEMO_NODE_TIMER_FACTOR_MS = 500;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_RISK_CLAIM_WINDOW_MS = 1200;
+const PLANT_FLOATING_TEXT_MAX = 10;
+const PLANT_FLOATING_TEXT_MS = 1000;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_RED_EXCLUSION_RADIUS = DEMO_BLAST.radius + 13;
 const DEMO_PLANT_COUNT = 2;
@@ -1082,6 +1084,7 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
           ...getDemoCompletedRouteNodeIds(member, index, cycle, escapeStart - 1, { ...options, ignoreEscape: true }),
           ...(progress >= 1 ? [riskClaim.node.id] : []),
         ],
+        repairedEvents: progress >= 1 ? [{ id: riskClaim.node.id, elapsed: escapeStart + riskClaim.holdMs }] : [],
       };
     }
     const start = getDemoRouteState(member, index, cycle, escapeStart - 1, { ...options, ignoreEscape: true });
@@ -1092,10 +1095,12 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
       activeNode: null,
       holdRemainingMs: 0,
       repairedNodeIds: getDemoCompletedRouteNodeIds(member, index, cycle, escapeStart - 1, options),
+      repairedEvents: getDemoRouteState(member, index, cycle, escapeStart - 1, { ...options, ignoreEscape: true }).repairedEvents || [],
     };
   }
 
   const repairedNodeIds = new Set();
+  const repairedEvents = [];
   let cursor = Math.max(0, elapsed - index * 170);
   let timelineElapsed = index * 170;
   let position = member.spawn;
@@ -1113,6 +1118,7 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
           activeNode: null,
           holdRemainingMs: 0,
           repairedNodeIds: [...repairedNodeIds],
+          repairedEvents: [...repairedEvents],
         };
       }
 
@@ -1129,12 +1135,14 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
           holdRemainingMs: holdMs - cursor,
           holdDurationMs: holdMs,
           repairedNodeIds: [...repairedNodeIds],
+          repairedEvents: [...repairedEvents],
         };
       }
 
       cursor -= holdMs;
       timelineElapsed += holdMs;
       repairedNodeIds.add(node.id);
+      repairedEvents.push({ id: node.id, elapsed: timelineElapsed });
     }
   }
 
@@ -1144,6 +1152,7 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
     activeNode: null,
     holdRemainingMs: 0,
     repairedNodeIds: [...repairedNodeIds],
+    repairedEvents: [...repairedEvents],
   };
 }
 
@@ -1416,6 +1425,7 @@ function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes =
   }));
   const activeActors = actors || actorRoutes.map(({ member, index, ability, route }) => ({ ...route, member, ability, id: member.id, index }));
   const repairedNodeIds = new Set(actorRoutes.flatMap((entry) => entry.route.repairedNodeIds || []));
+  const repairedEvents = new Map(actorRoutes.flatMap((entry) => (entry.route.repairedEvents || []).map((event) => [event.id, { ...event, memberId: entry.member.id }])));
 
   return visibleNodes.map((baseNode, index) => {
     const node = applyDemoNodePulse(baseNode, index, repairElapsed);
@@ -1427,6 +1437,7 @@ function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes =
     const routeClaimant = actorRoutes.find((entry) => entry.member.id === claimant?.member?.id || entry.member.id === claimant?.id);
     const repaired = repairedNodeIds.has(node.id);
     const repairedBy = repaired ? actorRoutes.find((entry) => entry.route.repairedNodeIds?.includes(node.id))?.member.id || null : null;
+    const repairedEvent = repairedEvents.get(node.id);
     const holdRemainingMs =
       !stasisLocked || canPlayerClaimDuringStasis(claimant)
         ? routeClaimant?.route.activeNode?.id === node.id
@@ -1440,6 +1451,7 @@ function getDemoNodeStates(loop, now = Date.now(), actors = null, visibleNodes =
       seed: node.x * 0.013 + node.y * 0.017 + loop.cycle,
       repaired,
       repairedBy,
+      repairedAtElapsed: repairedEvent?.elapsed ?? null,
       state: repaired ? NODE_STATES.repaired : stasisLocked && !claimedBy ? NODE_STATES.stasis : claimedBy ? NODE_STATES.claimed : NODE_STATES.unclaimed,
       stasisLocked,
       claimedBy,
@@ -3135,6 +3147,61 @@ function drawBuildingCountdown(style, time, room = sessionState.room) {
   ctx.globalAlpha = 1;
 }
 
+function drawPlantClaimFeed(style, room = sessionState.room, loop = null) {
+  if (!room?.plants?.length) return;
+  const eventsByPlant = new Map(room.plants.map((plant) => [plant.id, []]));
+  const now = Date.now();
+  const repairElapsed = loop ? getDemoRepairElapsed(loop) : null;
+  for (const node of room.nodes || []) {
+    if (!node.repaired) continue;
+    const age = Number.isFinite(node.repairedAtElapsed) ? repairElapsed - node.repairedAtElapsed : now - (node.repairedAt || 0);
+    if (age < 0 || age > PLANT_FLOATING_TEXT_MS) continue;
+    const plant = nearestPlantForPoint(node, room.plants);
+    if (!plant) continue;
+    const abilityId = getNodeOwnerAbilityId(room, node, loop);
+    const effectiveValue = getEffectiveNodeValue(node, abilityId);
+    eventsByPlant.get(plant.id)?.push({ node, age, effectiveValue });
+  }
+
+  for (const plant of room.plants) {
+    const events = (eventsByPlant.get(plant.id) || [])
+      .sort((a, b) => a.age - b.age)
+      .slice(0, PLANT_FLOATING_TEXT_MAX);
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i];
+      const stackIndex = events.length - 1 - i;
+      const fade = 1 - event.age / PLANT_FLOATING_TEXT_MS;
+      const label = `${event.effectiveValue >= 0 ? "+" : ""}${formatNodeValue(event.effectiveValue)}`;
+      const width = Math.max(34, label.length * 6 + 8);
+      const x = Math.round(clamp(plant.x - width / 2, 6, VIEW.width - width - 6));
+      const y = Math.round(clamp(plant.y - plant.blast.radius - 16 - stackIndex * 11 - (1 - fade) * 5, 8, VIEW.height - 18));
+      ctx.globalAlpha = clamp(fade, 0, 1);
+      px(x, y, width, 9, "rgba(0, 0, 0, 0.78)");
+      px(x, y, width, 2, event.effectiveValue < 0 ? "#ff6b28" : style.scene.glow);
+      ctx.fillStyle = event.effectiveValue < 0 ? "#ffb6a6" : "#dff7b8";
+      ctx.font = "7px monospace";
+      ctx.fillText(label, x + 4, y + 7);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function nearestPlantForPoint(point, plants = []) {
+  return plants
+    .map((plant) => ({ plant, distance: Math.hypot(point.x - plant.x, point.y - plant.y) }))
+    .sort((a, b) => a.distance - b.distance)[0]?.plant || null;
+}
+
+function getNodeOwnerAbilityId(room, node, loop = null) {
+  const ownerId = node.repairedBy;
+  if (!ownerId) return null;
+  if (loop) {
+    const member = squad.find((candidate) => candidate.id === ownerId);
+    return member ? getDemoAbility(member, loop.cycle).id : null;
+  }
+  return room.players?.[ownerId]?.ability?.id || null;
+}
+
 function drawRoomHud(style) {
   const room = sessionState.room;
   if (!room) return;
@@ -3241,19 +3308,31 @@ function drawDemoSkillLog(style, room) {
 
 function drawDemoBlastReport(style, room, loop) {
   if (!room || loop.elapsed < DEMO_SUMMARY_START || loop.elapsed >= DEMO_VORTEX_START) return;
-  const summary = room.summary || [];
-  drawRoundSummary(style, summary, {
-    x: 520,
-    y: 22,
-    width: 238,
-    title: "DEMO BLAST REPORT",
-  });
-
+  const rows = buildLeaderboardRows(room.summary || []).slice(0, 5);
+  const panelX = 532;
+  const panelY = 20;
+  const panelWidth = 220;
+  const caught = (room.summary || []).filter((row) => row.state === "incapacitated").length;
+  px(panelX, panelY, panelWidth, 92, "rgba(0, 0, 0, 0.72)");
+  px(panelX, panelY, panelWidth, 3, style.scene.accent);
+  ctx.fillStyle = style.css.text;
+  ctx.font = "8px monospace";
+  ctx.fillText("DEMO BLAST REPORT", panelX + 16, panelY + 17);
   ctx.fillStyle = style.css.muted;
   ctx.font = "6px monospace";
-  const caught = summary.filter((row) => row.state === "incapacitated").length;
-  ctx.fillText(`${caught} caught in blast`, 536, 122);
-  ctx.fillText("round score wiped", 536, 132);
+  ctx.fillText(`${caught} caught  ${rows.length} ranked`, panelX + 16, panelY + 29);
+  ctx.fillText("PLAYER       TOTAL   ROUND", panelX + 12, panelY + 42);
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i];
+    const y = panelY + 54 + i * 8;
+    if (row.ability) drawAbilityIcon(row.ability, panelX + 12, y - 7, 6);
+    ctx.fillStyle = row.state === "incapacitated" ? "#ffb6a6" : style.css.text;
+    ctx.fillText(row.id.slice(0, 8).padEnd(8, " "), panelX + 22, y);
+    ctx.fillStyle = style.css.text;
+    ctx.fillText(formatScore(row.score).padStart(6, " "), panelX + 108, y);
+    ctx.fillStyle = row.roundScore > 0 ? "#dff7b8" : style.css.muted;
+    ctx.fillText(formatScore(row.roundScore).padStart(6, " "), panelX + 158, y);
+  }
 }
 
 function drawRoundSummary(style, summary, options = {}) {
@@ -3920,6 +3999,7 @@ function render(now) {
   drawRoomObjectives(style, now, activeRoom);
   drawSkillDebugAreas(style, activeRoom);
   drawBuildingCountdown(style, now, activeRoom);
+  drawPlantClaimFeed(style, activeRoom, sessionState.room ? null : loop);
   if (sessionState.room) {
     drawRoomPlayers(style);
     drawClaimTimers(style);
