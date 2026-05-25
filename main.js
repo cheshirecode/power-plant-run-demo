@@ -3431,10 +3431,10 @@ function getRoomVisualLoop(fallbackLoop) {
   const room = sessionState.room;
   if (!room) return fallbackLoop;
 
-  if (room.phase === "explosion") {
+  if (isRoomVisuallyExploding(room)) {
     return {
       ...fallbackLoop,
-      elapsed: EXPLOSION_START + Math.max(0, Date.now() - room.phaseStartedAt),
+      elapsed: EXPLOSION_START + getRoomExplosionAge(room),
       rebuildProgress: 0,
       upgradeLevel: room.upgradeLevel || 0,
     };
@@ -3454,6 +3454,21 @@ function getRoomVisualLoop(fallbackLoop) {
     elapsed: Math.min(EXPLOSION_START - 1, fallbackLoop.elapsed),
     upgradeLevel: room.upgradeLevel || 0,
   };
+}
+
+function isRoomVisuallyExploding(room, now = Date.now()) {
+  return room?.phase === "explosion" || (room?.phase === "repair" && countdownMs(room, now) <= 0);
+}
+
+function getRoomExplosionAge(room, now = Date.now()) {
+  if (room?.phase === "explosion") return Math.max(0, now - room.phaseStartedAt);
+  if (room?.phase === "repair" && room.countdownEndsAt) return Math.max(0, now - room.countdownEndsAt);
+  return 0;
+}
+
+function getVisualRoom(room, now = Date.now()) {
+  if (!room || !isRoomVisuallyExploding(room, now)) return room;
+  return { ...room, phase: "explosion" };
 }
 
 function drawPixelSoldierSprite(style, actor, time) {
@@ -3847,6 +3862,45 @@ function drawExplosion(style, elapsed, time) {
   ctx.globalAlpha = 1;
 }
 
+function drawPlantShockwave(style, plant, elapsed, time) {
+  if (elapsed < EXPLOSION_START) return;
+  const age = elapsed - EXPLOSION_START;
+  const blast = plant.blast || { x: plant.x, y: plant.y, radius: DEMO_BLAST.radius };
+  const burst = clamp(age / 850, 0, 1);
+  const smoke = clamp((age - 450) / 1800, 0, 1);
+  const pulse = Math.floor(Math.sin(time / 34) * 2);
+
+  if (burst < 1) {
+    ctx.globalAlpha = 0.42 * (1 - burst);
+    drawPixelCircle(blast.x, blast.y, 18 + Math.floor(blast.radius * burst), "#ff6b28", "#fff6cf");
+    ctx.globalAlpha = 0.24 * (1 - burst);
+    drawPixelCircle(blast.x, blast.y, 32 + Math.floor(blast.radius * 1.35 * burst), style.scene.glow);
+  }
+
+  for (let i = 0; i < 18; i += 1) {
+    const angle = hash2d(i, plant.x, plant.y) * Math.PI * 2;
+    const distance = 14 + Math.min(blast.radius * 0.86, age / 10 + hash2d(i, 7, plant.x) * 34);
+    const x = blast.x + Math.cos(angle) * distance;
+    const y = blast.y + Math.sin(angle) * distance * 0.72;
+    const alpha = clamp(0.72 - age / 1700, 0, 0.72);
+    if (alpha <= 0) continue;
+    ctx.globalAlpha = alpha;
+    px(x, y, 4 + (i % 3), 4 + ((i + 1) % 3), i % 2 === 0 ? "#ff6b28" : "#fff6cf");
+  }
+
+  if (smoke > 0) {
+    for (let i = 0; i < 24; i += 1) {
+      const angle = hash2d(i, 13, plant.y) * Math.PI * 2;
+      const distance = 10 + hash2d(i, 17, plant.x) * blast.radius * 0.64 + smoke * 18;
+      const x = blast.x + Math.cos(angle) * distance + pulse;
+      const y = blast.y + Math.sin(angle) * distance * 0.58 - smoke * 28;
+      ctx.globalAlpha = 0.28 * (1 - smoke);
+      px(x, y, 6 + (i % 4), 4 + (i % 3), "rgba(42, 38, 25, 0.9)");
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawVortexTransition(style, loop, time) {
   if (loop.elapsed < DEMO_VORTEX_START) return;
   const progress = clamp((loop.elapsed - DEMO_VORTEX_START) / (REBUILD_END - DEMO_VORTEX_START), 0, 1);
@@ -4009,10 +4063,11 @@ function render(now) {
     return;
   }
   drawBackground(style, now);
-  const activeRoom = demoRoom || sessionState.room;
+  const activeRoom = getVisualRoom(demoRoom || sessionState.room);
   const plants = activeRoom?.plants?.length ? activeRoom.plants : [{ id: "plant-1", ...WORLD_CENTER, blast: activeRoom?.blast || DEMO_BLAST }];
   for (const plant of plants) {
     drawPlantAt(style, now, plantProgress, loop, plant, plants.length > 1 ? PLANT_WORLD_SCALE * 0.42 : PLANT_WORLD_SCALE);
+    drawPlantShockwave(style, plant, loop.elapsed, now);
     drawCenteredPlant(() => drawExplosion(style, loop.elapsed, now), plant, plants.length > 1 ? PLANT_WORLD_SCALE * 0.42 : PLANT_WORLD_SCALE);
   }
   drawRoomObjectives(style, now, activeRoom);
