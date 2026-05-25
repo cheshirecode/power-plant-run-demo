@@ -228,6 +228,7 @@ const DEMO_INITIAL_NODE_COUNT = 40;
 const DEMO_NODE_SPAWN_PER_PLAYER_MULTIPLIER = 1.5;
 const DEMO_RUNNER_SPEED = 2.15;
 const DEMO_ESCAPE_THRESHOLD_MS = 2600;
+const DEMO_ESCAPE_RECOVER_MS = 1500;
 const DEMO_NODE_TIMER_FACTOR_MS = 500;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_RISK_CLAIM_WINDOW_MS = 1200;
@@ -1068,9 +1069,10 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
   const ability = getDemoAbility(member, cycle);
   const escapeThreshold = getDemoEscapeThresholdMs(ability);
   const escapeStart = options.ignoreEscape ? Number.POSITIVE_INFINITY : getDemoEscapeStartElapsed(cycle, escapeThreshold);
+  const countdownNow = options.ignoreEscape ? Number.POSITIVE_INFINITY : getDemoCountdownMsForElapsed(cycle, elapsed);
   const targets = getDemoNodePlan(member, index, cycle);
 
-  if (!options.ignoreEscape && elapsed >= escapeStart) {
+  if (!options.ignoreEscape && elapsed >= escapeStart && countdownNow <= escapeThreshold + DEMO_ESCAPE_RECOVER_MS) {
     const riskClaim = getDemoRiskClaimTarget(member, index, cycle, escapeStart, elapsed, ability);
     if (riskClaim) {
       return getDemoRiskClaimRouteState(member, index, cycle, elapsed, escapeStart, escapeThreshold, riskClaim, options);
@@ -3381,6 +3383,7 @@ function drawDemoBlastReport(style, room, loop) {
     const row = rows[i];
     const y = panelY + 54 + i * 8;
     if (row.ability) drawAbilityIcon(row.ability, panelX + 12, y - 7, 6);
+    if (row.state === "incapacitated") drawSkullIcon(panelX + 205, y - 7, 8, "#ffb6a6", "#2a1512");
     ctx.fillStyle = row.state === "incapacitated" ? "#ffb6a6" : style.css.text;
     ctx.fillText(row.id.slice(0, 8).padEnd(8, " "), panelX + 22, y);
     ctx.fillStyle = style.css.text;
@@ -3408,11 +3411,13 @@ function drawRoundSummary(style, summary, options = {}) {
   ctx.font = "7px monospace";
   for (let i = 0; i < visibleRows.length; i += 1) {
     const row = visibleRows[i];
-    const state = row.state === "incapacitated" ? "DOWN" : "OK";
     const roundPrefix = row.roundScore >= 0 ? "+" : "";
     const textX = row.ability ? panelX + 24 : panelX + 12;
     if (row.ability) {
       drawAbilityIcon(row.ability, panelX + 12, panelY + 34 + i * 12, 7);
+    }
+    if (row.state === "incapacitated") {
+      drawSkullIcon(panelX + panelWidth - 16, panelY + 35 + i * 12, 8, "#ffb6a6", "#2a1512");
     }
     ctx.fillStyle = style.css.text;
     ctx.fillText(row.id.slice(0, 8).padEnd(8, " "), textX, panelY + 42 + i * 12);
@@ -3420,11 +3425,23 @@ function drawRoundSummary(style, summary, options = {}) {
     ctx.fillText(formatScore(row.score).padStart(6, " "), panelX + panelWidth - 104, panelY + 42 + i * 12);
     ctx.fillStyle = style.css.muted;
     ctx.fillText(
-      `${formatScore(row.previousScore)}+${roundPrefix}${formatScore(row.roundScore)} ${state}`,
+      `${formatScore(row.previousScore)}+${roundPrefix}${formatScore(row.roundScore)}`,
       panelX + panelWidth - 66,
       panelY + 42 + i * 12,
     );
   }
+}
+
+function drawSkullIcon(x, y, size = 8, fill = "#ffb6a6", shadow = "#2a1512") {
+  const unit = Math.max(1, Math.floor(size / 4));
+  px(x, y + unit, unit * 4, unit * 3, shadow);
+  px(x + unit, y, unit * 2, unit, fill);
+  px(x, y + unit, unit * 4, unit * 2, fill);
+  px(x + unit, y + unit * 3, unit * 2, unit, fill);
+  px(x + unit, y + unit, unit, unit, shadow);
+  px(x + unit * 2, y + unit, unit, unit, shadow);
+  px(x + unit, y + unit * 2, unit, unit, shadow);
+  px(x + unit * 3, y + unit * 2, unit, unit, shadow);
 }
 
 function drawFinalScoreScene(style) {
