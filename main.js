@@ -738,7 +738,7 @@ function getDemoCountdownMs(loop) {
 
 function getDemoCountdownMsForElapsed(cycle, elapsed) {
   const nodeDeltaMs = getDemoNodeTimerDeltaMs(cycle, elapsed);
-  return Math.max(0, Math.min(DEMO_REPAIR_DURATION - elapsed + nodeDeltaMs, EXPLOSION_START - elapsed));
+  return Math.max(0, Math.min(DEMO_REPAIR_DURATION - elapsed + nodeDeltaMs, DEMO_MAX_REPAIR_ELAPSED - elapsed));
 }
 
 function getDemoNodeTimerDeltaMs(cycle, elapsed) {
@@ -3309,12 +3309,14 @@ function drawDemoHud(style, room, loop) {
       const ability = getDemoAbility(member, loop.cycle);
       const previousScore = getDemoPreviousScore(member, index, loop.cycle);
       const roundScore = getDemoRoundScore(member, index, loop);
+      const outcome = getDemoPlayerOutcome(member, index, loop);
       return {
         id: member.id,
         ability,
         previousScore,
         roundScore,
         score: previousScore + roundScore,
+        state: outcome.state,
       };
     }),
   );
@@ -3326,6 +3328,7 @@ function drawDemoHud(style, room, loop) {
     const y = panelY + 41 + i * 8;
     const roundPrefix = row.roundScore >= 0 ? "+" : "";
     drawAbilityIcon(row.ability, runnersX + 11, y - 7, 7);
+    if (row.state === "incapacitated") drawSkullIcon(runnersX + 108, y - 7, 7, "#ffb6a6", "#2a1512");
     ctx.fillStyle = style.css.text;
     ctx.fillText(row.id.slice(0, 8).toUpperCase().padEnd(8, " "), runnersX + 24, y);
     ctx.fillStyle = row.roundScore >= 0 ? "#dff7b8" : "#ffb6a6";
@@ -3572,6 +3575,7 @@ function drawCharacterMotionDetails(style, actor, x, y, time) {
     ctx.globalAlpha = 0.5 + Math.sin(time / 140) * 0.16;
     px(x - 3, y - 36, 2, 2, "#fff6cf");
     px(x + 3, y - 39, 3, 3, "#ff6b28");
+    drawSkullIcon(x - 5, y - 49, 10, "#ffb6a6", "#2a1512");
     ctx.globalAlpha = 1;
     return;
   }
