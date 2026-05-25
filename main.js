@@ -232,6 +232,7 @@ const DEMO_NODE_TIMER_FACTOR_MS = 500;
 const DEMO_RUNNER_PIXELS_PER_MS = 0.22;
 const DEMO_RISK_CLAIM_WINDOW_MS = 1200;
 const PLANT_FLOATING_TEXT_MAX = 10;
+const PLANT_FLOATING_TEXT_VISIBLE = 5;
 const PLANT_FLOATING_TEXT_MS = 1000;
 const DEMO_BLAST = { x: WORLD_CENTER.x, y: WORLD_CENTER.y, radius: 115 };
 const DEMO_RED_EXCLUSION_RADIUS = DEMO_BLAST.radius + 13;
@@ -1072,20 +1073,7 @@ function getDemoRouteState(member, index, cycle, elapsed, options = {}) {
   if (!options.ignoreEscape && elapsed >= escapeStart) {
     const riskClaim = getDemoRiskClaimTarget(member, index, cycle, escapeStart, elapsed, ability);
     if (riskClaim) {
-      const progress = clamp((elapsed - escapeStart) / riskClaim.holdMs, 0, 1);
-      return {
-        x: riskClaim.node.x,
-        y: riskClaim.node.y,
-        phase: "claim",
-        activeNode: riskClaim.node,
-        holdRemainingMs: riskClaim.holdMs * (1 - progress),
-        holdDurationMs: riskClaim.holdMs,
-        repairedNodeIds: [
-          ...getDemoCompletedRouteNodeIds(member, index, cycle, escapeStart - 1, { ...options, ignoreEscape: true }),
-          ...(progress >= 1 ? [riskClaim.node.id] : []),
-        ],
-        repairedEvents: progress >= 1 ? [{ id: riskClaim.node.id, elapsed: escapeStart + riskClaim.holdMs }] : [],
-      };
+      return getDemoRiskClaimRouteState(member, index, cycle, elapsed, escapeStart, escapeThreshold, riskClaim, options);
     }
     const start = getDemoRouteState(member, index, cycle, escapeStart - 1, { ...options, ignoreEscape: true });
     const progress = easeInOut(clamp((elapsed - escapeStart) / escapeThreshold, 0, 1));
@@ -1167,10 +1155,56 @@ function getDemoRiskClaimTarget(member, index, cycle, escapeStart, elapsed, abil
       const distance = Math.hypot(node.x - start.x, node.y - start.y);
       const travelMs = getDemoTravelState(distance, DEMO_RUNNER_PIXELS_PER_MS * getDemoPathSpeed(ability), ability, escapeStart, 10_000).elapsedMs;
       const holdMs = getDemoHoldDurationMs(applyDemoNodePulse(node, 0, escapeStart), ability);
-      return { node, holdMs, totalMs: travelMs + holdMs, score: node.value * 100 - distance };
+      return { node, start, travelMs, holdMs, totalMs: travelMs + holdMs, score: node.value * 100 - distance };
     })
-    .filter((candidate) => candidate.holdMs <= DEMO_RISK_CLAIM_WINDOW_MS && candidate.totalMs <= remaining + 700 && elapsed < escapeStart + candidate.totalMs)
+    .filter((candidate) => candidate.holdMs <= DEMO_RISK_CLAIM_WINDOW_MS && candidate.totalMs <= remaining + 700 && elapsed < escapeStart + candidate.totalMs + DEMO_ESCAPE_THRESHOLD_MS)
     .sort((a, b) => b.score - a.score)[0] || null;
+}
+
+function getDemoRiskClaimRouteState(member, index, cycle, elapsed, escapeStart, escapeThreshold, riskClaim, options = {}) {
+  const prior = riskClaim.start;
+  const elapsedSinceRisk = Math.max(0, elapsed - escapeStart);
+  const priorIds = prior.repairedNodeIds || [];
+  const priorEvents = prior.repairedEvents || [];
+
+  if (elapsedSinceRisk < riskClaim.travelMs) {
+    const progress = clamp(elapsedSinceRisk / Math.max(1, riskClaim.travelMs), 0, 1);
+    return {
+      ...getPointOnPath([prior, riskClaim.node], progress),
+      phase: "move",
+      activeNode: null,
+      holdRemainingMs: 0,
+      repairedNodeIds: [...priorIds],
+      repairedEvents: [...priorEvents],
+    };
+  }
+
+  const claimElapsed = elapsedSinceRisk - riskClaim.travelMs;
+  if (claimElapsed < riskClaim.holdMs) {
+    return {
+      x: riskClaim.node.x,
+      y: riskClaim.node.y,
+      phase: "claim",
+      activeNode: riskClaim.node,
+      holdRemainingMs: riskClaim.holdMs - claimElapsed,
+      holdDurationMs: riskClaim.holdMs,
+      repairedNodeIds: [...priorIds],
+      repairedEvents: [...priorEvents],
+    };
+  }
+
+  const repairedNodeIds = [...priorIds, riskClaim.node.id];
+  const repairedEvents = [...priorEvents, { id: riskClaim.node.id, elapsed: escapeStart + riskClaim.travelMs + riskClaim.holdMs }];
+  const escapeElapsed = elapsedSinceRisk - riskClaim.totalMs;
+  const progress = easeInOut(clamp(escapeElapsed / escapeThreshold, 0, 1));
+  return {
+    ...getPointOnPath([riskClaim.node, member.escape], progress),
+    phase: "escape",
+    activeNode: null,
+    holdRemainingMs: 0,
+    repairedNodeIds,
+    repairedEvents,
+  };
 }
 
 function getDemoEscapeStartElapsed(cycle, escapeThreshold) {
@@ -3185,11 +3219,13 @@ function drawPlantClaimFeed(style, room = sessionState.room, loop = null) {
   for (const plant of room.plants) {
     const events = (eventsByPlant.get(plant.id) || [])
       .sort((a, b) => a.age - b.age)
-      .slice(0, PLANT_FLOATING_TEXT_MAX);
+      .slice(0, PLANT_FLOATING_TEXT_MAX)
+      .slice(0, PLANT_FLOATING_TEXT_VISIBLE);
     for (let i = events.length - 1; i >= 0; i -= 1) {
       const event = events[i];
       const stackIndex = events.length - 1 - i;
-      const fade = 1 - event.age / PLANT_FLOATING_TEXT_MS;
+      const displayAge = Math.max(0, event.age - stackIndex * 80);
+      const fade = 1 - displayAge / PLANT_FLOATING_TEXT_MS;
       const label = `${event.effectiveValue >= 0 ? "+" : ""}${formatNodeValue(event.effectiveValue)}`;
       const width = Math.max(34, label.length * 6 + 8);
       const x = Math.round(clamp(plant.x - width / 2, 6, VIEW.width - width - 6));
