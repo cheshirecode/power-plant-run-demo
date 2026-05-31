@@ -9,7 +9,7 @@ Power Plant Run is a browser canvas game deployed as a Cloudflare Worker with Du
 - Production URL: `https://power-plant-run-demo.cheshirecode.workers.dev`
 - GitHub repo: `cheshirecode/power-plant-run-demo`
 - Main worker: `src/worker.js`
-- Frontend entry: `index.html`, `main.js`, `styles.css`, and helpers in `client/`
+- Frontend entry: `public/index.html`, `public/main.js`, `public/styles.css`, and helpers in `public/client/`
 - Product/design context: `PRODUCT.md`, `DESIGN.md`, `.impeccable/design.json`
 
 ## Local Tooling
@@ -17,7 +17,7 @@ Power Plant Run is a browser canvas game deployed as a Cloudflare Worker with Du
 - Use the user's shell environment for Node tooling:
   `source ~/.zshrc >/dev/null 2>&1; <command>`
 - Validate JavaScript with:
-  `node --check main.js && node --check client/formatters.js && node --check client/room-url.js && node --check src/worker.js`
+  `node --check public/main.js && node --check public/client/formatters.js && node --check public/client/room-url.js && node --check src/worker.js`
 - Validate Cloudflare packaging with:
   `npm run deploy -- --dry-run`
 - Run locally with:

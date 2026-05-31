@@ -1,4 +1,4 @@
-import { buildRoomStatusText } from "../client/room-status.js";
+import { buildRoomStatusText } from "../public/client/room-status.js";
 
 const now = Date.now();
 const room = {

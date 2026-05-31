@@ -1,15 +1,26 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { NODE_STATES, PLAYER_STATES, SKILL_CONFIG, SKILL_IDS } from "../client/skill-mechanics.js";
+import { NODE_STATES, PLAYER_STATES, SKILL_CONFIG, SKILL_IDS } from "../public/client/skill-mechanics.js";
 
 installBrowserStubs();
 
-await import(`${pathToFileURL(`${process.cwd()}/main.js`).href}?smoke=${Date.now()}`);
+await import(`${pathToFileURL(`${process.cwd()}/public/main.js`).href}?smoke=${Date.now()}`);
 const { __ROOM_MECHANICS_DEBUG__: roomMechanics } = await import(`../src/worker.js?smoke=${Date.now()}`);
 
 const debug = globalThis.window.__POWER_PLANT_DEMO_DEBUG__;
 assert(debug, "demo debug API was not registered");
 assert(!roomMechanics.canPlayerClaimNode({ state: roomMechanics.states.player.stasis }), "stasis room player could claim a node");
+assert(roomMechanics.defaultSkillId === SKILL_IDS.magnet, "live default skill should be magnet");
+assert(roomMechanics.liveSkillIds.includes(SKILL_IDS.magnet), "magnet was not registered as a live skill");
+assert(roomMechanics.selectLiveAbility("unknown").id === SKILL_IDS.magnet, "unknown live skill did not fall back to magnet");
+assert(
+  roomMechanics.canPlayerReachNode({ x: 0, y: 0, state: roomMechanics.states.player.alive, ability: { id: SKILL_IDS.magnet } }, { x: 70, y: 0, size: 8 }),
+  "live magnet skill did not expand claim reach",
+);
+assert(
+  !roomMechanics.canPlayerReachNode({ x: 0, y: 0, state: roomMechanics.states.player.alive }, { x: 70, y: 0, size: 8 }),
+  "unskilled room player could claim at magnet range",
+);
 const claimResetNode = { claimedBy: "p1", claimedAt: 10, claimEndsAt: 20, repaired: false, state: roomMechanics.states.node.claimed };
 roomMechanics.clearNodeClaim(claimResetNode);
 assert(!claimResetNode.claimedBy && !claimResetNode.claimEndsAt && claimResetNode.state === roomMechanics.states.node.unclaimed, "room node claim reset did not clear state");
@@ -25,7 +36,9 @@ for (const id of ["boost", "magnet", "stasis", "warp", "greed"]) {
 assert(!demoOnlyIds.has("blink"), "old blink ability is still registered");
 
 const workerSource = readFileSync("src/worker.js", "utf8");
+const liveSkillIds = new Set(roomMechanics.liveSkillIds);
 for (const id of demoOnlyIds) {
+  if (liveSkillIds.has(id)) continue;
   if (id === SKILL_IDS.stasis) continue;
   assert(!workerSource.includes(`"${id}"`) && !workerSource.includes(`'${id}'`), `${id} leaked into server gameplay`);
 }

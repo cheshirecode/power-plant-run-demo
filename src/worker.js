@@ -1,4 +1,4 @@
-import { getEffectiveNodeValue, getNodeScoreValue } from "../client/skill-mechanics.js";
+import { canSkillClaimNode, getCaptureDurationMs, getEffectiveNodeValue, getNodeScoreValue, SKILL_IDS } from "../public/client/skill-mechanics.js";
 
 const ROOM_ID_PATTERN = /^[a-z0-9-]{3,40}$/;
 const PLAYER_ID_PATTERN = /^[a-zA-Z0-9_-]{1,40}$/;
@@ -51,6 +51,18 @@ const NODE_STATE_UNCLAIMED = "unclaimed";
 const NODE_STATE_CLAIMED = "claimed";
 const NODE_STATE_REPAIRED = "repaired";
 const NODE_STATE_STASIS = "stasis";
+const LIVE_SKILL_IDS = [SKILL_IDS.magnet];
+const DEFAULT_LIVE_SKILL_ID = SKILL_IDS.magnet;
+const LIVE_SKILL_DEFINITIONS = {
+  [SKILL_IDS.magnet]: {
+    id: SKILL_IDS.magnet,
+    label: "MAG",
+    name: "Magnet Gloves",
+    hint: "claim farther",
+    color: "#57d56c",
+    accent: "#d7ffd8",
+  },
+};
 const START_NODES = [
   { id: "n1", x: 70, y: 348 },
   { id: "n2", x: 96, y: 172 },
@@ -118,6 +130,7 @@ export class GameRoom {
       replayVotes: {},
       closed: false,
       botEnabled: false,
+      defaultSkillId: DEFAULT_LIVE_SKILL_ID,
       roundBanked: false,
     };
   }
@@ -195,6 +208,7 @@ export class GameRoom {
     const targetPlayerCount = clampNumber(url.searchParams.get("players"), 1, MAX_PLAYERS);
     const spectate = url.searchParams.get("spectate") === "1";
     const botEnabled = url.searchParams.get("bot") === "1";
+    const requestedSkillId = url.searchParams.get("skill");
     if (this.roomState.closed) {
       return json({ error: "Room closed" }, 410);
     }
@@ -208,7 +222,7 @@ export class GameRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    await this.acceptPlayer(server, player, spectate);
+    await this.acceptPlayer(server, player, spectate, requestedSkillId);
 
     return new Response(null, {
       status: 101,
@@ -229,8 +243,10 @@ export class GameRoom {
         blast: storedPlants[0]?.blast || stored.blast || null,
         players: stored.players || {},
         nodes: stored.nodes || cloneNodes(storedPlants),
+        defaultSkillId: normalizeLiveSkillId(stored.defaultSkillId),
       };
     }
+    this.normalizeLiveAbilities();
     this.loaded = true;
   }
 
@@ -238,7 +254,7 @@ export class GameRoom {
     await this.state.storage.put("roomState", this.roomState);
   }
 
-  async acceptPlayer(socket, player, spectate = false) {
+  async acceptPlayer(socket, player, spectate = false, requestedSkillId = null) {
     socket.accept();
     const playerId = player.id;
     this.sessions.set(socket, playerId);
@@ -260,7 +276,13 @@ export class GameRoom {
       state: PLAYER_STATE_ALIVE,
       ready: false,
       spectator: isSpectator,
+      ability: selectLiveAbility(requestedSkillId, this.roomState.defaultSkillId),
     };
+    if (this.roomState.players[playerId].spectator) {
+      delete this.roomState.players[playerId].ability;
+    } else {
+      this.roomState.players[playerId].ability = selectLiveAbility(this.roomState.players[playerId].ability?.id, this.roomState.defaultSkillId);
+    }
     this.roomState.players[playerId].connected = true;
     delete this.roomState.players[playerId].disconnectedAt;
     if (!this.roomState.ownerId && !this.roomState.players[playerId].spectator) {
@@ -408,6 +430,7 @@ export class GameRoom {
       player.caughtInBlast = false;
       player.state = PLAYER_STATE_ALIVE;
       player.ready = Boolean(player.bot);
+      player.ability = selectLiveAbility(player.ability?.id, this.roomState.defaultSkillId);
       delete player.botTargetNodeId;
     }
     await this.setPhase("repair", ROUND_COUNTDOWN_MS);
@@ -432,7 +455,7 @@ export class GameRoom {
     for (const node of activeNodes) {
       if (!node.claimedBy || node.repaired) continue;
       const claimant = this.roomState.players[node.claimedBy];
-      if (!canPlayerClaimNode(claimant) || !isInsideNode(claimant, node) || node.state === NODE_STATE_STASIS) {
+      if (!canPlayerClaimNode(claimant) || !canPlayerReachNode(claimant, node) || node.state === NODE_STATE_STASIS) {
         clearNodeClaim(node);
         continue;
       }
@@ -447,13 +470,14 @@ export class GameRoom {
     if (activeNodes.some((node) => node.claimedBy === playerId && !node.repaired)) return;
 
     const node = activeNodes
-      .filter((candidate) => !candidate.repaired && !candidate.claimedBy && isInsideNode(player, candidate))
+      .filter((candidate) => !candidate.repaired && !candidate.claimedBy && canPlayerReachNode(player, candidate))
       .sort((a, b) => distanceToNode(player, a) - distanceToNode(player, b))[0];
     if (!node) return;
 
     node.claimedBy = playerId;
     node.claimedAt = now;
-    node.claimEndsAt = now + node.holdMs;
+    node.claimEndsAt = now + getLiveCaptureDurationMs(node, player);
+    node.claimDurationMs = getLiveCaptureDurationMs(node, player);
     node.state = NODE_STATE_CLAIMED;
     await this.scheduleNextRepairAlarm();
   }
@@ -542,11 +566,14 @@ export class GameRoom {
       if (delta <= 0) continue;
       const sign = node.value < 0 ? -1 : 1;
       node.value = roundValue((Math.abs(node.value) + delta) * sign);
-      const priorHoldMs = node.holdMs || nodeHoldMs(node.value);
+      const priorHoldMs = node.claimDurationMs || node.holdMs || nodeHoldMs(node.value);
       node.holdMs = nodeHoldMs(node.value);
       node.valuePulseCount = targetPulseCount;
       if (node.claimedBy && node.claimEndsAt) {
-        node.claimEndsAt += Math.max(0, node.holdMs - priorHoldMs);
+        const claimant = this.roomState.players[node.claimedBy];
+        const nextHoldMs = getLiveCaptureDurationMs(node, claimant);
+        node.claimDurationMs = nextHoldMs;
+        node.claimEndsAt += Math.max(0, nextHoldMs - priorHoldMs);
       }
     }
   }
@@ -705,9 +732,22 @@ export class GameRoom {
       spectator: false,
       bot: true,
       connected: true,
+      ability: selectLiveAbility(null, this.roomState.defaultSkillId),
     };
     this.roomState.players[BOT_ID].ready = true;
     this.roomState.players[BOT_ID].connected = true;
+    this.roomState.players[BOT_ID].ability = selectLiveAbility(this.roomState.players[BOT_ID].ability?.id, this.roomState.defaultSkillId);
+  }
+
+  normalizeLiveAbilities() {
+    this.roomState.defaultSkillId = normalizeLiveSkillId(this.roomState.defaultSkillId);
+    for (const player of Object.values(this.roomState.players || {})) {
+      if (player.spectator) {
+        delete player.ability;
+        continue;
+      }
+      player.ability = selectLiveAbility(player.ability?.id, this.roomState.defaultSkillId);
+    }
   }
 
   nextRole() {
@@ -916,10 +956,35 @@ function canPlayerClaimNode(player) {
   return Boolean(player && !player.spectator && player.state !== PLAYER_STATE_INCAPACITATED && player.state !== PLAYER_STATE_STASIS);
 }
 
+function canPlayerReachNode(player, node) {
+  if (!canPlayerClaimNode(player)) return false;
+  if (player.ability?.id) {
+    return canSkillClaimNode({ ...player, phase: player.state }, node);
+  }
+  return isInsideNode(player, node);
+}
+
+function getLiveCaptureDurationMs(node, player) {
+  return getCaptureDurationMs(node, player?.ability?.id);
+}
+
+function normalizeLiveSkillId(skillId) {
+  return LIVE_SKILL_IDS.includes(skillId) ? skillId : DEFAULT_LIVE_SKILL_ID;
+}
+
+function selectLiveAbility(skillId = null, defaultSkillId = DEFAULT_LIVE_SKILL_ID) {
+  const id = normalizeLiveSkillId(skillId || defaultSkillId);
+  return {
+    ...LIVE_SKILL_DEFINITIONS[id],
+    source: skillId && LIVE_SKILL_IDS.includes(skillId) ? "selected" : "default",
+  };
+}
+
 function clearNodeClaim(node, nextState = NODE_STATE_UNCLAIMED) {
   delete node.claimedBy;
   delete node.claimedAt;
   delete node.claimEndsAt;
+  delete node.claimDurationMs;
   if (!node.repaired) {
     node.state = nextState;
   }
@@ -947,7 +1012,12 @@ export const __ROOM_MECHANICS_DEBUG__ = {
   isNodeSpawned,
   nodeSpawnWave,
   canPlayerClaimNode,
+  canPlayerReachNode,
   clearNodeClaim,
+  defaultSkillId: DEFAULT_LIVE_SKILL_ID,
+  liveSkillDefinitions: LIVE_SKILL_DEFINITIONS,
+  liveSkillIds: LIVE_SKILL_IDS,
+  selectLiveAbility,
   genericNodeMagnitude,
   regularNodeValue,
   states: {

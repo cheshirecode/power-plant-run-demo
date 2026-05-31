@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 
 installBrowserStubs();
 
-await import(`${pathToFileURL(`${process.cwd()}/main.js`).href}?analysis=${Date.now()}`);
+await import(`${pathToFileURL(`${process.cwd()}/public/main.js`).href}?analysis=${Date.now()}`);
 
 const debug = globalThis.window.__POWER_PLANT_DEMO_DEBUG__;
 if (!debug) throw new Error("demo debug API was not registered");

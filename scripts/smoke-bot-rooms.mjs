@@ -46,6 +46,11 @@ async function smokeBotRoom(playerCount) {
       socket.send(JSON.stringify({ type: "ready", ready: true }));
     }
     const repairState = await started;
+    for (const player of Object.values(repairState.players || {})) {
+      if (!player.spectator) {
+        assert(player.ability?.id === "magnet", `player ${player.id} missing default magnet skill in ${roomId}`);
+      }
+    }
 
     const bot = repairState.players?.["bot-1"];
     assert(bot, `bot missing in ${roomId}`);
