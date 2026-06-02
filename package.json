@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "cf:whoami": "wrangler whoami",
+    "dev": "node scripts/run-wrangler.mjs dev",
+    "deploy": "node scripts/run-wrangler.mjs deploy",
+    "cf": "node scripts/run-wrangler.mjs",
+    "cf:whoami": "node scripts/run-wrangler.mjs whoami",
     "smoke:admin": "node scripts/smoke-admin.mjs",
     "smoke:bots": "node scripts/smoke-bot-rooms.mjs",
     "smoke:countdown": "node scripts/smoke-countdown-ui.mjs",

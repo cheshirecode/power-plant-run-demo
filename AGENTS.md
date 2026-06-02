@@ -16,6 +16,9 @@ Power Plant Run is a browser canvas game deployed as a Cloudflare Worker with Du
 
 - Use the user's shell environment for Node tooling:
   `source ~/.zshrc >/dev/null 2>&1; <command>`
+- Wrangler commands must use the repo wrapper so deploys use the shell-provided
+  `CLOUDFLARE_API_TOKEN`, not whichever OAuth account Wrangler last logged into:
+  `npm run cf -- <args>`, `npm run dev`, or `npm run deploy`.
 - Validate JavaScript with:
   `node --check public/main.js && node --check public/client/formatters.js && node --check public/client/room-url.js && node --check src/worker.js`
 - Validate Cloudflare packaging with:

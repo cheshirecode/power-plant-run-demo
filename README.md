@@ -48,11 +48,17 @@ Local commands:
 
 ```sh
 npm install
+export CLOUDFLARE_API_TOKEN=...
 npm run dev
 npm run smoke:demo
 npm run smoke:bots
 npm run deploy
 ```
+
+Wrangler commands run through `scripts/run-wrangler.mjs`, which requires
+`CLOUDFLARE_API_TOKEN` from the shell and injects the project account id. This
+prevents deploys from accidentally using a different logged-in Wrangler OAuth
+account.
 
 `npm run smoke:demo` loads the browser demo scene with canvas/DOM stubs and
 checks the actual demo mechanics: eight players, 20 starting nodes, claim/repair
@@ -66,6 +72,6 @@ the bot joins and moves, then deletes every smoke room it created.
 Runtime secrets are stored in Cloudflare, not in this repository:
 
 ```sh
-printf '%s' "$POWER_PLANT_RUN_GITHUB_CLIENT_ID" | npx wrangler secret put GITHUB_CLIENT_ID
-printf '%s' "$POWER_PLANT_RUN_GITHUB_CLIENT_SECRET" | npx wrangler secret put GITHUB_CLIENT_SECRET
+printf '%s' "$POWER_PLANT_RUN_GITHUB_CLIENT_ID" | npm run -s cf -- secret put GITHUB_CLIENT_ID
+printf '%s' "$POWER_PLANT_RUN_GITHUB_CLIENT_SECRET" | npm run -s cf -- secret put GITHUB_CLIENT_SECRET
 ```
